@@ -126,6 +126,8 @@ export async function resolvePr(pr: PrInfo): Promise<PrInfo & { baseSha: string;
 
 let protocol: Promise<string> | undefined;
 export async function remoteUrl(owner: string, repo: string) {
-  protocol ??= pexec('gh', ['config', 'get', 'git_protocol']).then((r) => r.stdout.trim(), () => 'https');
+  protocol ??= process.env.GRAPH_DIFF_GIT_PROTOCOL
+    ? Promise.resolve(process.env.GRAPH_DIFF_GIT_PROTOCOL)
+    : pexec('gh', ['config', 'get', 'git_protocol']).then((r) => r.stdout.trim(), () => 'https');
   return (await protocol) === 'ssh' ? `git@github.com:${owner}/${repo}.git` : `https://github.com/${owner}/${repo}.git`;
 }

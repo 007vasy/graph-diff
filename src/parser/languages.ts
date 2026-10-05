@@ -18,6 +18,8 @@ export interface LangSpec {
   containers: Record<string, (n: Node) => string | null>;
   /** node type → call refs found at this node */
   calls: Record<string, (n: Node) => CallRef[]>;
+  /** node type → identifiers bound by an import at this node */
+  imports?: Record<string, (n: Node) => string[]>;
   /** names that act as constructors when a container is "called" */
   ctorNames?: string[];
   /** custom extractor (used by Terraform, which has no functions or calls) */
@@ -26,7 +28,8 @@ export interface LangSpec {
 
 const field = (f: string) => (n: Node) => n.childForFieldName(f)?.text ?? null;
 const SIMPLE = /^[A-Za-z_$][\w$]*$/;
-const recvOf = (n: Node | null | undefined) => (n && SIMPLE.test(n.text) ? n.text : undefined);
+/** Receiver of a member call: a simple identifier, or '?' when it is an expression (`a.b.c()`, `f().g()`). */
+const recvOf = (n: Node | null | undefined) => (n && SIMPLE.test(n.text) ? n.text : '?');
 const firstNamed = (n: Node) => n.namedChild(0);
 
 // ---------- JavaScript / TypeScript ----------
@@ -70,6 +73,19 @@ function jsNew(n: Node): CallRef[] {
   return c && SIMPLE.test(c.text) ? [{ name: 'constructor', recv: c.text }] : [];
 }
 
+function jsImport(n: Node): string[] {
+  const clause = n.namedChildren.find((c) => c.type === 'import_clause');
+  if (!clause) return [];
+  const out: string[] = [];
+  for (const c of clause.namedChildren) {
+    if (c.type === 'identifier') out.push(c.text);
+    else if (c.type === 'namespace_import') out.push(c.namedChildren.find((x) => x.type === 'identifier')?.text ?? '');
+  }
+  return out.filter(Boolean);
+}
+
+const jsImports: LangSpec['imports'] = { import_statement: jsImport };
+
 const jsFunctions: LangSpec['functions'] = {
   function_declaration: field('name'),
   generator_function_declaration: field('name'),
@@ -86,6 +102,15 @@ const jsContainers: LangSpec['containers'] = {
 const jsCalls: LangSpec['calls'] = { call_expression: jsCall, new_expression: jsNew };
 
 // ---------- Go ----------
+
+function goImport(n: Node): string[] {
+  const alias = n.childForFieldName('name')?.text;
+  if (alias) return alias === '_' || alias === '.' ? [] : [alias];
+  const segs = (n.childForFieldName('path')?.text ?? '').replace(/"/g, '').split('/');
+  let last = segs.pop() ?? '';
+  if (/^v\d+$/.test(last) && segs.length) last = segs.pop()!; // module/v2 → module
+  return last ? [last.replace(/^go-/, '').replace(/[.-].*$/, '')] : [];
+}
 
 function goReceiverType(n: Node): string | null {
   const recv = n.childForFieldName('receiver');
@@ -106,6 +131,16 @@ function goCall(n: Node): CallRef[] {
 }
 
 // ---------- Python ----------
+
+function pyImport(n: Node): string[] {
+  const out: string[] = [];
+  for (const c of n.namedChildren) {
+    if (n.type === 'import_from_statement' && c === n.childForFieldName('module_name')) continue;
+    if (c.type === 'aliased_import') out.push(c.childForFieldName('alias')?.text ?? '');
+    else if (c.type === 'dotted_name') out.push(n.type === 'import_statement' ? c.text.split('.')[0] : c.text.split('.').pop()!);
+  }
+  return out.filter(Boolean);
+}
 
 function pyCall(n: Node): CallRef[] {
   const fn = n.childForFieldName('function');
@@ -183,6 +218,7 @@ export const LANGS: LangSpec[] = [
     functions: jsFunctions,
     containers: jsContainers,
     calls: jsCalls,
+    imports: jsImports,
     ctorNames: ['constructor'],
   },
   {
@@ -192,6 +228,7 @@ export const LANGS: LangSpec[] = [
     functions: jsFunctions,
     containers: jsContainers,
     calls: jsCalls,
+    imports: jsImports,
     ctorNames: ['constructor'],
   },
   {
@@ -201,6 +238,7 @@ export const LANGS: LangSpec[] = [
     functions: jsFunctions,
     containers: jsContainers,
     calls: jsCalls,
+    imports: jsImports,
     ctorNames: ['constructor'],
   },
   {
@@ -210,6 +248,7 @@ export const LANGS: LangSpec[] = [
     functions: { function_declaration: field('name'), method_declaration: field('name') },
     containers: {},
     calls: { call_expression: goCall },
+    imports: { import_spec: goImport },
   },
   {
     id: 'python',
@@ -218,6 +257,7 @@ export const LANGS: LangSpec[] = [
     functions: { function_definition: field('name') },
     containers: { class_definition: field('name') },
     calls: { call: pyCall },
+    imports: { import_statement: pyImport, import_from_statement: pyImport },
     ctorNames: ['__init__'],
   },
   {

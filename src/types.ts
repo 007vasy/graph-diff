@@ -13,6 +13,8 @@ export interface FnNode {
   hash: string;
   code: string;
   calls: string[];
+  /** module nodes only: identifiers bound by imports (package names / aliases / namespaces) */
+  imports?: string[];
 }
 
 export interface CallGraph {

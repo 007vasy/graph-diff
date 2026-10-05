@@ -3,6 +3,13 @@ import type { CallGraph, FnId, FnNode } from './types.js';
 import { LANGS } from './parser/languages.js';
 
 const MAX_GLOBAL_CANDIDATES = 3;
+/** Member calls on an unknown receiver (`x.Close()`) are ambiguous; only link when nearly unique. */
+const MAX_MEMBER_CANDIDATES = 2;
+/** Method names so common (mostly stdlib/framework) that an unknown receiver says nothing about the target. */
+const UBIQUITOUS = new Set(
+  'Lock Unlock RLock RUnlock Wait Done Close Context Error String Err Add Inc Dec Load Store Get Set Len Reset Write Read Start Stop Run Name Value Bytes Equal Cmp Copy Next New Debug Info Warn Warnf Infof Debugf Errorf Fatal Fatalf Logf Helper Cleanup Parallel Skip push pop append get set keys values items toString valueOf then catch finally map filter forEach reduce join split log emit on off'.split(' '),
+);
+const MOCK_RE = /(^|\/)(mocks?|fakes?|testutils?|testhelpers?)\/|(^|\/|_)mock[^/]*$|_mock\.go$/i;
 const SELF_RECV = new Set(['this', 'self', 'super', 'Self']);
 const CTOR_NAMES = new Map(LANGS.map((l) => [l.id, l.ctorNames ?? []]));
 
@@ -21,6 +28,8 @@ export function buildCallGraph(fns: Iterable<FnNode>): CallGraph {
   const byContainer = new Map<string, FnNode[]>(); // "lang:Container.name"
   const byFile = new Map<string, FnNode[]>(); // "file|name"
   const tfByDir = new Map<string, FnNode>(); // "dir|address"
+  const byDir = new Map<string, FnNode[]>(); // "lang:dir|name"
+  const byPkg = new Map<string, FnNode[]>(); // "lang:pkgOrModule|name" (dir basename or file stem)
 
   for (const f of fns) {
     nodes.set(f.id, f);
@@ -31,7 +40,26 @@ export function buildCallGraph(fns: Iterable<FnNode>): CallGraph {
     }
     push(byName, `${family(f.lang)}:${f.name}`, f);
     push(byFile, `${f.file}|${f.name}`, f);
+    const fdir = posix.dirname(f.file);
+    push(byDir, `${family(f.lang)}:${fdir}|${f.name}`, f);
+    const pkg = posix.basename(fdir);
+    const stem = posix.basename(f.file).split('.')[0];
+    push(byPkg, `${family(f.lang)}:${pkg}|${f.name}`, f);
+    if (stem !== pkg) push(byPkg, `${family(f.lang)}:${stem}|${f.name}`, f);
     if (f.container) push(byContainer, `${family(f.lang)}:${f.container}.${f.name}`, f);
+  }
+
+  const testFileCache = new Map<string, boolean>();
+  const testFile = (p: string) => {
+    let v = testFileCache.get(p);
+    if (v === undefined) testFileCache.set(p, (v = isTestFile(p) || MOCK_RE.test(p)));
+    return v;
+  };
+  const callerIsTest = new Map<FnNode, boolean>();
+  const importsByFile = new Map<string, Set<string>>();
+  for (const f of nodes.values()) {
+    callerIsTest.set(f, testFile(f.file));
+    if (f.imports?.length) importsByFile.set(f.file, new Set(f.imports));
   }
 
   const edges = new Set<string>();
@@ -88,20 +116,30 @@ export function buildCallGraph(fns: Iterable<FnNode>): CallGraph {
       // 5. Global by name.
       let cands = byName.get(`${fam}:${name}`);
       if (!cands) continue;
-      if (recv && !SELF_RECV.has(recv)) {
+      const member = recv !== '' && !SELF_RECV.has(recv);
+      // Production code doesn't call into tests or mocks.
+      const prodOnly = (xs: FnNode[] | undefined) => (xs && !callerIsTest.get(f) ? xs.filter((c) => !testFile(c.file)) : xs);
+      cands = prodOnly(cands)!;
+      if (!cands.length) continue;
+      const sameDir = prodOnly(byDir.get(`${fam}:${dir}|${name}`));
+      if (member) {
         // pkg.Fn() in Go / module.fn() in Python: prefer candidates whose directory or file is named after recv.
-        const byPkg = cands.filter(
-          (c) => posix.basename(posix.dirname(c.file)) === recv || posix.basename(c.file).split('.')[0] === recv,
-        );
-        if (byPkg.length) cands = byPkg;
-      } else if (!recv) {
+        const pkg = recv !== '?' ? prodOnly(byPkg.get(`${fam}:${recv}|${name}`))?.filter((c) => !c.container) : undefined;
+        if (pkg?.length) cands = pkg;
+        else {
+          // pkg.Fn() on a package we couldn't find in the repo → external library.
+          if (importsByFile.get(f.file)?.has(recv)) continue;
+          // obj.method(): only methods qualify, and only when nearly unique.
+          if (UBIQUITOUS.has(name)) continue;
+          cands = cands.filter((c) => c.container);
+          if (cands.length > MAX_MEMBER_CANDIDATES) continue;
+        }
+      } else if (!recv && sameDir?.length) {
         // Bare call: same package/directory wins (Go packages, Python siblings).
-        const sameDir = cands.filter((c) => posix.dirname(c.file) === dir);
-        if (sameDir.length) cands = sameDir;
+        cands = sameDir;
       }
       if (cands.length > MAX_GLOBAL_CANDIDATES) {
-        const sameDir = cands.filter((c) => posix.dirname(c.file) === dir);
-        if (sameDir.length && sameDir.length <= MAX_GLOBAL_CANDIDATES) cands = sameDir;
+        if (sameDir?.length && sameDir.length <= MAX_GLOBAL_CANDIDATES) cands = sameDir;
         else continue;
       }
       link(f, cands);

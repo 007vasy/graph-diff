@@ -8,14 +8,27 @@ export { langForPath, LANGS } from './languages.js';
 
 const require = createRequire(import.meta.url);
 let initPromise: Promise<void> | undefined;
-const languages = new Map<string, Promise<Parser>>();
+
+interface Handlers {
+  type: string;
+  fn?: (n: Parser.SyntaxNode) => string | null;
+  con?: (n: Parser.SyntaxNode) => string | null;
+  call?: (n: Parser.SyntaxNode) => { name: string; recv?: string }[];
+  imp?: (n: Parser.SyntaxNode) => string[];
+}
+interface Loaded {
+  parser: Parser;
+  /** typeId → handlers; numeric dispatch avoids marshalling a type string out of WASM per node */
+  table: Array<Handlers | undefined>;
+}
+const languages = new Map<string, Promise<Loaded>>();
 
 function init() {
   initPromise ??= Parser.init();
   return initPromise;
 }
 
-async function parserFor(spec: LangSpec): Promise<Parser> {
+async function parserFor(spec: LangSpec): Promise<Loaded> {
   let p = languages.get(spec.id);
   if (!p) {
     p = (async () => {
@@ -23,7 +36,21 @@ async function parserFor(spec: LangSpec): Promise<Parser> {
       const lang = await Parser.Language.load(require.resolve(spec.wasm));
       const parser = new Parser();
       parser.setLanguage(lang);
-      return parser;
+      const table: Loaded['table'] = [];
+      const own = <T>(r: Record<string, T>, k: string) => (Object.hasOwn(r, k) ? r[k] : undefined);
+      for (let id = 0; id < lang.nodeTypeCount; id++) {
+        const type = lang.nodeTypeForId(id);
+        if (!type) continue;
+        const h: Handlers = {
+          type,
+          fn: own(spec.functions, type),
+          con: own(spec.containers, type),
+          call: own(spec.calls, type),
+          imp: spec.imports && own(spec.imports, type),
+        };
+        if (h.fn || h.con || h.call || h.imp) table[id] = h;
+      }
+      return { parser, table };
     })();
     languages.set(spec.id, p);
   }
@@ -48,16 +75,16 @@ export const MODULE_NAME = '<module>';
 export async function extractFile(path: string, source: string): Promise<FnNode[] | null> {
   const spec = langForPath(path);
   if (!spec) return null;
-  const parser = await parserFor(spec);
+  const { parser, table } = await parserFor(spec);
   const tree = parser.parse(source);
   try {
-    return spec.custom ? extractTerraform(path, spec, tree.rootNode) : extractGeneric(path, spec, tree, source);
+    return spec.custom ? extractTerraform(path, spec, tree.rootNode) : extractGeneric(path, spec, table, tree, source);
   } finally {
     tree.delete();
   }
 }
 
-function extractGeneric(path: string, spec: LangSpec, tree: Parser.Tree, source: string): FnNode[] {
+function extractGeneric(path: string, spec: LangSpec, table: Loaded['table'], tree: Parser.Tree, source: string): FnNode[] {
   const out: FnNode[] = [];
   const seen = new Map<string, number>();
   const module: FnNode = {
@@ -75,21 +102,22 @@ function extractGeneric(path: string, spec: LangSpec, tree: Parser.Tree, source:
   const fnStack: FnNode[] = [module];
   const containerStack: string[] = [];
   const topRanges: Array<[number, number]> = [];
+  const selfVars = new Map<FnNode, string>(); // Go: receiver variable name acts like `self`
 
   const cursor = tree.walk();
   const visit = () => {
     do {
-      const type = cursor.nodeType;
-      const fnGet = Object.hasOwn(spec.functions, type) ? spec.functions[type] : undefined;
-      const conGet = Object.hasOwn(spec.containers, type) ? spec.containers[type] : undefined;
-      const callGet = Object.hasOwn(spec.calls, type) ? spec.calls[type] : undefined;
+      const h = table[cursor.nodeTypeId];
       let pushedFn = false;
       let pushedCon = false;
-      if (fnGet || conGet || callGet) {
+      if (h) {
+        const { type, fn: fnGet, con: conGet, call: callGet, imp } = h;
         const node = cursor.currentNode;
+        if (imp) (module.imports ??= []).push(...imp(node));
         if (callGet) {
           const cur = fnStack[fnStack.length - 1];
-          for (const c of callGet(node)) cur.calls.push(encodeCall(c.name, c.recv));
+          const selfVar = selfVars.get(cur);
+          for (const c of callGet(node)) cur.calls.push(encodeCall(c.name, c.recv && c.recv === selfVar ? 'self' : c.recv));
         }
         if (conGet) {
           const name = conGet(node);
@@ -101,10 +129,8 @@ function extractGeneric(path: string, spec: LangSpec, tree: Parser.Tree, source:
         if (fnGet) {
           const name = fnGet(node);
           if (name) {
-            const container =
-              type === 'method_declaration' && spec.id === 'go'
-                ? goReceiver(node)
-                : containerStack[containerStack.length - 1];
+            const goRecv = type === 'method_declaration' && spec.id === 'go' ? goReceiver(node) : undefined;
+            const container = goRecv ? goRecv.type : containerStack[containerStack.length - 1];
             const base = `${path}::${container ? container + '.' : ''}${name}`;
             const n = (seen.get(base) ?? 0) + 1;
             seen.set(base, n);
@@ -122,6 +148,7 @@ function extractGeneric(path: string, spec: LangSpec, tree: Parser.Tree, source:
               code,
               calls: [],
             };
+            if (goRecv?.name) selfVars.set(fn, goRecv.name);
             if (fnStack.length === 1) topRanges.push([node.startIndex, node.endIndex]);
             out.push(fn);
             fnStack.push(fn);
@@ -154,9 +181,10 @@ function extractGeneric(path: string, spec: LangSpec, tree: Parser.Tree, source:
   return out;
 }
 
-function goReceiver(node: Parser.SyntaxNode): string | null {
-  const recv = node.childForFieldName('receiver');
-  return recv?.descendantsOfType('type_identifier')[0]?.text ?? null;
+function goReceiver(node: Parser.SyntaxNode): { type: string; name?: string } | undefined {
+  const param = node.childForFieldName('receiver')?.namedChildren.find((c) => c.type === 'parameter_declaration');
+  const type = param?.descendantsOfType('type_identifier')[0]?.text;
+  return type ? { type, name: param!.childForFieldName('name')?.text } : undefined;
 }
 
 // ---------- Terraform ----------

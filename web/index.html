@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>graph-diff</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <aside id="left">
+    <header>
+      <div class="brand"><span class="logo">◆</span> graph-diff</div>
+      <button id="refresh" title="Reload PR list">↻</button>
+    </header>
+    <div class="nav">
+      <button id="prev" title="Previous PR (p)">◀ prev</button>
+      <span id="pos"></span>
+      <button id="next" title="Next PR (n)">next ▶</button>
+    </div>
+    <ul id="queue"></ul>
+  </aside>
+
+  <main id="center">
+    <div id="graph"></div>
+    <div id="topbar">
+      <div id="title"></div>
+      <div id="meta"></div>
+    </div>
+    <div id="loading" hidden><div class="spinner"></div><div id="loadmsg">Loading…</div></div>
+    <div id="error" hidden></div>
+    <section id="detail" hidden>
+      <header><span id="detail-title"></span><button id="detail-close" title="Close (Esc)">✕</button></header>
+      <div id="detail-body"></div>
+    </section>
+    <div id="legend">
+      <span><i class="dot added"></i>added</span>
+      <span><i class="dot modified"></i>modified</span>
+      <span><i class="dot removed"></i>removed</span>
+      <span><i class="dot unchanged"></i>context</span>
+      <span><i class="ring"></i>no test reach</span>
+      <span class="folders-only"><i class="cube file"></i>file</span>
+      <span class="folders-only"><i class="cube folder"></i>folder</span>
+    </div>
+  </main>
+
+  <aside id="right">
+    <section>
+      <h3>Changes</h3>
+      <div class="tiles">
+        <div class="tile"><b id="s-files">–</b><span>files</span></div>
+        <div class="tile"><b id="s-add" class="c-added">–</b><span>lines added</span></div>
+        <div class="tile"><b id="s-del" class="c-removed">–</b><span>lines removed</span></div>
+        <div class="tile"><b id="s-fn">–</b><span>functions</span></div>
+      </div>
+      <div class="fnbar" id="s-fnbar"></div>
+      <div class="row small" id="s-edges"></div>
+    </section>
+    <section>
+      <h3>Coverage</h3>
+      <div id="s-cov"></div>
+    </section>
+    <section>
+      <h3>View</h3>
+      <label class="ctl">Depth <output id="depth-val">1</output>
+        <input id="depth" type="range" min="0" max="6" value="1" />
+      </label>
+      <label class="ctl check"><input id="folders" type="checkbox" /> File / folder layer <kbd>f</kbd></label>
+      <label class="ctl check"><input id="labels" type="checkbox" /> All labels <kbd>l</kbd></label>
+      <label class="ctl check"><input id="tests" type="checkbox" checked /> Show test code</label>
+      <div class="filters">
+        <label><input type="checkbox" data-status="added" checked /> added</label>
+        <label><input type="checkbox" data-status="modified" checked /> modified</label>
+        <label><input type="checkbox" data-status="removed" checked /> removed</label>
+        <label><input type="checkbox" data-status="unchanged" checked /> context</label>
+      </div>
+      <input id="search" type="search" placeholder="Find function…  ( / )" autocomplete="off" />
+      <div class="small" id="counts"></div>
+    </section>
+    <section class="grow">
+      <h3>Changed functions <span class="hint"><kbd>j</kbd>/<kbd>k</kbd></span></h3>
+      <ul id="changes"></ul>
+      <h3>Files</h3>
+      <ul id="files"></ul>
+      <h3>Languages</h3>
+      <div id="langs" class="small"></div>
+      <div id="perf" class="small muted"></div>
+    </section>
+  </aside>
+  <script type="module" src="dist/app.js"></script>
+</body>
+</html>

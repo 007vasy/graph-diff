@@ -5,7 +5,8 @@ import { parseLcov, type LcovData } from './coverage.js';
 import { diffGraphs } from './diff.js';
 import { CACHE_DIR, diffFiles, ensureRepo, fetchCommits, git, listTree, readBlobs, type TreeEntry } from './git.js';
 import { remoteUrl, resolvePr } from './github.js';
-import { extractFile, langForPath } from './parser/index.js';
+import { langForPath } from './parser/index.js';
+import { extractMany, type ParseItem } from './parser/pool.js';
 import type { FileChange, FnNode, GraphPayload, PrInfo } from './types.js';
 
 const ANALYSIS_VERSION = 3;
@@ -65,7 +66,7 @@ export async function analyze(pr: PrInfo, opts: AnalyzeOptions = {}): Promise<Gr
     info = { ...pr, baseSha: base, headSha: head };
   } else {
     progress('Resolving PR…');
-    const r = await resolvePr(pr);
+    const r = pr.baseSha && pr.headSha ? (pr as PrInfo & { baseSha: string; headSha: string }) : await resolvePr(pr);
     info = r;
     lap('resolve');
     const cachePath = join(CACHE_DIR, 'analyses', `${r.owner}_${r.repo}_${r.baseSha}_${r.headSha}_v${ANALYSIS_VERSION}.json`);
@@ -124,20 +125,18 @@ export async function analyze(pr: PrInfo, opts: AnalyzeOptions = {}): Promise<Gr
   const blobs = await readBlobs(dir, [...new Set([...needed.values()].map((e) => e.blob))]);
   lap('readBlobs');
   progress(`Parsing ${needed.size} files…`);
-  let i = 0;
+  const todo: Array<[string, ParseItem]> = [];
   for (const [k, e] of needed) {
-    const src = blobs.get(e.blob);
-    if (src === undefined) continue;
-    let fns: FnNode[] | null = null;
-    try {
-      fns = await extractFile(e.path, src);
-    } catch {
-      skipped++;
-    }
-    if (!fns) continue;
-    if (!changed.has(e.path)) for (const f of fns) f.code = '';
-    cacheSet(k, fns);
-    if (++i % 2000 === 0) progress(`Parsing ${i}/${needed.size} files…`);
+    const source = blobs.get(e.blob);
+    if (source !== undefined) todo.push([k, { path: e.path, source, keepCode: changed.has(e.path) }]);
+  }
+  const parsed = await extractMany(
+    todo.map(([, it]) => it),
+    (n) => progress(`Parsing ${n}/${todo.length} files…`),
+  );
+  for (let i = 0; i < todo.length; i++) {
+    if (parsed[i]) cacheSet(todo[i][0], parsed[i]!);
+    else if (langForPath(todo[i][1].path)) skipped++;
   }
   lap('parse');
 
