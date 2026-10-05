@@ -73,7 +73,7 @@ npm run bench -- smartcontractkit/chainlink 6  # per-phase timings → BENCHMARK
 
 ## Testing it
 
-See the [review handbook](docs/REVIEW_HANDBOOK.md), a 10-minute hands-on walkthrough.
+See the [review handbook](docs/REVIEW_HANDBOOK.md), a 10-minute hands-on walkthrough, and the [demo script](docs/DEMO.md) (chainlink + go-ethereum, with real busy reviewers).
 
 ## License
 

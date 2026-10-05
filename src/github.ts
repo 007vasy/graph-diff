@@ -27,6 +27,8 @@ async function publicApi<T = any>(path: string): Promise<T> {
 }
 
 const isSso = (e: unknown) => /SAML|SSO/i.test(String((e as Error)?.message));
+/** Search refuses repos the token can't access (e.g. SSO-protected orgs), even public ones. */
+const isSearchDenied = (e: unknown) => /cannot be searched/i.test(String((e as Error)?.message));
 
 function fromRest(owner: string, repo: string, p: any): PrInfo {
   return {
@@ -109,7 +111,29 @@ export async function listPrs(opts: ListOptions): Promise<PrInfo[]> {
   if (opts.owner) args.push(`--owner=${opts.owner}`);
   if (opts.repo) args.push(`--repo=${opts.repo}`);
   if (opts.author) args.push(`--author=${opts.author}`);
-  return (await gh<SearchPr[]>(args)).map(fromSearch);
+  try {
+    return (await gh<SearchPr[]>(args)).map(fromSearch);
+  } catch (e) {
+    // Review queue in one public repo of an SSO org: list its open PRs anonymously and filter locally.
+    if (!opts.all && opts.repo && (isSso(e) || isSearchDenied(e))) return reviewQueueViaRest(opts.repo, opts.as, opts);
+    throw e;
+  }
+}
+
+async function reviewQueueViaRest(repo: string, as: string | undefined, opts: ListOptions): Promise<PrInfo[]> {
+  const [owner, name] = repo.split('/');
+  warnSso(owner);
+  const login = (as ?? (await gh<{ login: string }>(['api', 'user'])).login).toLowerCase();
+  const out: PrInfo[] = [];
+  for (let page = 1; page <= 3 && out.length < (opts.limit ?? 50); page++) {
+    const prs = await publicApi<any[]>(`repos/${owner}/${name}/pulls?state=open&per_page=100&page=${page}`);
+    for (const p of prs) {
+      const requested = (p.requested_reviewers ?? []).some((r: any) => r.login?.toLowerCase() === login);
+      if (requested && (!opts.author || p.user?.login === opts.author)) out.push(fromRest(owner, name, p));
+    }
+    if (prs.length < 100) break;
+  }
+  return out.slice(0, opts.limit ?? 50);
 }
 
 /** owner/repo of the GitHub remote in cwd, if any. */
@@ -137,18 +161,38 @@ export async function parsePrRef(ref: string): Promise<{ owner: string; repo: st
   throw new Error(`Can't parse PR reference "${ref}". Use a URL, owner/repo#123, or 123.`);
 }
 
-/** Fill in base/head SHAs (base = merge-base, matching GitHub's "Files changed"). */
-export async function resolvePr(pr: PrInfo): Promise<PrInfo & { baseSha: string; headSha: string }> {
+const ssoBlocked = new Set<string>(); // owners where gh hit SAML SSO: go straight to the public API
+
+type Resolved = PrInfo & { baseSha: string; headSha: string };
+const resolving = new Map<string, Promise<Resolved>>(); // in-flight + done lookups, shared by warm-up and analyses
+
+/** Fill in base/head SHAs (base = merge-base, matching GitHub's "Files changed"); each PR is resolved once per process. */
+export function resolvePr(pr: PrInfo): Promise<Resolved> {
+  let p = resolving.get(pr.key);
+  if (!p) {
+    p = resolveOnce(pr);
+    resolving.set(pr.key, p);
+    p.catch(() => resolving.delete(pr.key)); // allow a retry after failures
+  }
+  return p;
+}
+
+async function resolveOnce(pr: PrInfo): Promise<Resolved> {
   try {
+    if (ssoBlocked.has(pr.owner!)) throw new Error('SSO');
     return await resolvePrGh(pr);
   } catch (e) {
     if (!isSso(e)) throw e;
+    ssoBlocked.add(pr.owner!);
     warnSso(pr.owner!);
-    const { owner, repo, number } = pr as Required<PrInfo>;
-    const p = await publicApi(`repos/${owner}/${repo}/pulls/${number}`);
-    const cmp = await publicApi(`repos/${owner}/${repo}/compare/${encodeURIComponent(p.base.ref)}...${p.head.sha}?per_page=1`);
     useHttps = true;
-    return { ...pr, ...fromRest(owner, repo, p), headSha: p.head.sha, baseSha: cmp.merge_base_commit.sha };
+    const { owner, repo, number } = pr as Required<PrInfo>;
+    // Listings from the public API already carry head SHA + base ref: then only the merge base costs a request.
+    const p = pr.headSha && pr.baseRef ? null : await publicApi(`repos/${owner}/${repo}/pulls/${number}`);
+    const headSha = pr.headSha ?? p.head.sha;
+    const baseRef = pr.baseRef ?? p.base.ref;
+    const cmp = await publicApi(`repos/${owner}/${repo}/compare/${encodeURIComponent(baseRef)}...${headSha}?per_page=1`);
+    return { ...pr, ...(p ? fromRest(owner, repo, p) : {}), headSha, baseRef, baseSha: cmp.merge_base_commit.sha };
   }
 }
 
