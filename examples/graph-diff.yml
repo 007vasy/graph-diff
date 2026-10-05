@@ -27,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
       # Optional: run tests with coverage first and pass `coverage: coverage/lcov.info`.
-      - uses: 007vasy/graph-diff@main
+      - uses: 007vasy/graph-diff@v0.1
         with:
           comment: 'true'
           status: 'true'

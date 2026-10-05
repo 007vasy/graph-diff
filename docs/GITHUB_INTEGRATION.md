@@ -46,7 +46,7 @@ with nothing to install. GitHub only hosts static files (Pages), so graph-diff h
 2. Settings → Pages → *Deploy from a branch* → `gh-pages` / root (the branch is created on first run).
 3. Optional: run tests with coverage first and pass `coverage: coverage/lcov.info`.
 
-> `uses: 007vasy/graph-diff@main` only works from other repositories if this repository is **public**
+> `uses: 007vasy/graph-diff@v0.1` only works from other repositories if this repository is **public**
 > (or shared via *Settings → Actions → Access* within the same org/user on paid plans).
 
 ## Next steps
