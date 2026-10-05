@@ -15,7 +15,7 @@ import type {
 } from './types.js';
 import type { LcovData } from './coverage.js';
 
-export const MAX_DEPTH = 6;
+export const MAX_DEPTH = 3;
 const MAX_NODES = 4000;
 const MAX_PATCH_LINES = 400;
 /** Context nodes with more call-graph neighbours than this are shown but not expanded (keeps depth ≥2 readable). */

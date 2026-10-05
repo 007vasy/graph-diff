@@ -167,7 +167,7 @@ interface GraphPayload {
 }
 ```
 
-Server includes functions up to `maxDepth = 6` hops (undirected BFS over the union of base+head call edges) from changed functions, capped at 4000 nodes (nearest first); the UI filters by the current depth without a round-trip.
+Server includes functions up to `maxDepth = 3` hops (undirected BFS over the union of base+head call edges) from changed functions, capped at 4000 nodes (nearest first); the UI filters by the current depth without a round-trip.
 
 **Hub damping** (keeps depth ≥ 2 readable): context functions with > 25 call-graph neighbours are shown but not expanded (tooltip: "hub (N links)"); any single node pulls in ≤ 60 neighbours, changed ones first. On a chainlink PR this took depth 2 from ~1,880 to 109 functions.
 
@@ -198,7 +198,7 @@ Layout: **left** PR queue · **centre** 3D graph · **right** stats + controls �
 ### 7.2 Interactions
 - **Hover** function → tooltip: name, file:line, status, +/−, coverage, and the **function-level diff** (syntax-coloured +/− lines). Hover file → file stats.
 - **Click** → focus camera on node, pin tooltip; click on file opens it on GitHub at head SHA.
-- **Depth slider** 0–6 (keys `[` / `]`).
+- **Depth buttons** 0 / 1 / 2 / 3 (keys `[` / `]`), each showing how many functions that level displays.
 - **Folder layer toggle** (key `f`); **labels toggle** (key `l`); **hide unchanged** is implied by depth 0.
 - **Next / prev PR** buttons + keys `n` / `p`; **next / prev changed function** keys `j` / `k` (camera flies to it, tooltip pinned).
 - Search box to filter/focus a function by name.
@@ -265,7 +265,7 @@ Verified end to end on a public fork of go-ethereum with 8 replayed upstream PRs
 | G3 parse base + head into AST / call graph | ✅ | 7 languages + Java; tree-sitter WASM |
 | G4 function & edge diff statuses | ✅ | renames mapped; per-function patches |
 | G5 3D graph, hover shows local change | ✅ | hover tooltip with old/new line numbers; click pins full diff |
-| G6 depth control | ✅ | 0–6, `[`/`]`; hub damping |
+| G6 depth control | ✅ | 0/1/2/3 buttons with per-level counts, `[`/`]`; hub damping |
 | G7 toggleable file/folder layer | ✅ | `f`; folders → files → functions |
 | G8 stats: files, lines, coverage | ✅ | + functions, call edges, languages; static test reach + lcov |
 | G9 fast cycling | ✅ | 87–350 ms per next PR on chainlink after warm-up (§10) |

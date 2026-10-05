@@ -468,6 +468,7 @@ async function loadPr(index) {
     state.pendingFit = true;
     renderHeader();
     renderStats();
+    renderDepthCounts();
     renderChanges();
     renderFiles();
     const codeChanges = state.changed.length;
@@ -492,14 +493,25 @@ async function loadPr(index) {
 
 // ---------- Controls ----------
 
+const MAX_DEPTH = 3;
+const depthButtons = [...document.querySelectorAll('#depth [data-depth]')];
+
 function setDepth(d) {
-  state.depth = Math.max(0, Math.min(6, d));
-  $('depth').value = state.depth;
-  $('depth-val').textContent = state.depth;
+  state.depth = Math.max(0, Math.min(MAX_DEPTH, d));
+  for (const b of depthButtons) b.setAttribute('aria-checked', String(Number(b.dataset.depth) === state.depth));
   applyFilter();
 }
 
-$('depth').addEventListener('input', (e) => setDepth(Number(e.target.value)));
+for (const b of depthButtons) b.addEventListener('click', () => setDepth(Number(b.dataset.depth)));
+
+/** Show how many functions each depth level would display (cumulative), so big jumps are visible up front. */
+function renderDepthCounts() {
+  const fns = state.payload?.nodes.filter((n) => n.type === 'function') ?? [];
+  for (const b of depthButtons) {
+    const d = Number(b.dataset.depth);
+    b.querySelector('small').textContent = state.payload ? String(fns.filter((n) => n.depth <= d).length) : '';
+  }
+}
 $('folders').addEventListener('change', (e) => {
   state.folders = e.target.checked;
   applyFilter();

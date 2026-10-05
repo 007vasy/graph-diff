@@ -100,9 +100,15 @@
     </section>
     <section>
       <h3>View</h3>
-      <label class="ctl">Depth <output id="depth-val">1</output>
-        <input id="depth" type="range" min="0" max="6" value="1" />
-      </label>
+      <div class="ctl">
+        <span>Call-graph depth <kbd>[</kbd> <kbd>]</kbd></span>
+        <div id="depth" class="seg" role="radiogroup" aria-label="Call-graph depth">
+          <button role="radio" data-depth="0" title="Only the changed functions">0<small></small></button>
+          <button role="radio" data-depth="1" title="+ direct callers and callees">1<small></small></button>
+          <button role="radio" data-depth="2" title="+ two hops away">2<small></small></button>
+          <button role="radio" data-depth="3" title="+ three hops away">3<small></small></button>
+        </div>
+      </div>
       <label class="ctl check"><input id="folders" type="checkbox" /> File / folder layer <kbd>f</kbd></label>
       <label class="ctl check"><input id="labels" type="checkbox" /> All labels <kbd>l</kbd></label>
       <label class="ctl check"><input id="tests" type="checkbox" checked /> Show test code</label>

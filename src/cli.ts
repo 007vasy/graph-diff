@@ -26,7 +26,7 @@ function common(cmd: Command) {
   return cmd
     .option('--port <n>', 'server port', '7357')
     .option('--no-open', "don't open the browser")
-    .option('--depth <n>', 'initial call-graph depth', '1')
+    .option('--depth <n>', 'initial call-graph depth (0-3)', '1')
     .option('--coverage <lcov>', 'lcov.info for the head commit')
     .option('--max-files <n>', 'max source files parsed per commit', '15000')
     .option('--include-generated', 'also parse vendored/generated code')
