@@ -102,8 +102,8 @@ export async function listPrs(opts: ListOptions): Promise<PrInfo[]> {
   }
   const args = ['search', 'prs', '--state=open', '--limit', limit, '--json', SEARCH_FIELDS, '--sort', 'updated'];
   if (!opts.all) args.push('--review-requested=@me');
-  else if (opts.owner) args.push(`--owner=${opts.owner}`);
-  else args.push('--involves=@me');
+  else if (!opts.owner) args.push('--involves=@me');
+  if (opts.owner) args.push(`--owner=${opts.owner}`);
   if (opts.repo) args.push(`--repo=${opts.repo}`);
   if (opts.author) args.push(`--author=${opts.author}`);
   return (await gh<SearchPr[]>(args)).map(fromSearch);

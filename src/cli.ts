@@ -77,9 +77,10 @@ async function pick(prs: PrInfo[]): Promise<number> {
 
 async function listAndServe(opts: ListOptions, o: Common) {
   const fetch = () => listPrs(opts);
-  process.stderr.write('Fetching pull requests…\r');
+  const tty = process.stderr.isTTY;
+  if (tty) process.stderr.write('Fetching pull requests…\r');
   const prs = await fetch();
-  process.stderr.write('\x1b[2K');
+  if (tty) process.stderr.write('\x1b[2K');
   if (!prs.length) {
     console.log(opts.all ? 'No open pull requests found.' : 'No pull requests are waiting for your review. 🎉  (try `graph-diff list --all`)');
     return;
@@ -95,8 +96,9 @@ const fail = (e: unknown) => {
 
 common(program.command('review', { isDefault: true }).description('PRs where your review is requested (default)'))
   .option('--repo <owner/repo>', 'limit to one repository')
+  .option('--owner <user-or-org>', 'limit to repositories of one user / org')
   .option('--limit <n>', 'max PRs', '50')
-  .action((o) => listAndServe({ repo: o.repo, limit: Number(o.limit) }, o).catch(fail));
+  .action((o) => listAndServe({ repo: o.repo, owner: o.owner, limit: Number(o.limit) }, o).catch(fail));
 
 common(program.command('list').description('List open PRs and pick one'))
   .option('--all', 'all open PRs (in --repo / the current repo / --owner / involving you)')

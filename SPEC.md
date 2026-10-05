@@ -57,7 +57,7 @@ Language: **TypeScript on Node ≥ 20**, shipped as an npm package with a `graph
 
 ```
 graph-diff                         # = graph-diff review
-graph-diff review                  # PRs where review is requested from me (all repos)
+graph-diff review [--owner u] [--repo o/r]   # PRs where review is requested from me (optionally one user/org/repo)
 graph-diff list [--all] [--repo o/r] [--author @me] [--limit 50]
                                    # --all: every open PR I can see (in --repo, or the current repo,
                                    #        or across my account via `gh search prs --involves @me`)
@@ -82,7 +82,7 @@ Flow for `review` / `list`:
 3. Start the server with the **whole PR list** as the "queue", select the picked PR, open the browser.
 4. **N+1 flow** — the server makes `n` (next PR) instant:
    - *network warm-up*: all queue PRs are resolved concurrently and **all their commits fetched in one batched `git fetch`** at startup (network lane, independent of analysis);
-   - *look-ahead*: after a PR is served, the next **3** are analysed in the background;
+   - *look-ahead*: the next **3** PRs are analysed in the background, starting at server startup and again after each PR is served;
    - *priority*: an on-demand request jumps ahead of queued prefetches (analyses are CPU-bound and run one at a time).
 
 ## 4. Analysis pipeline

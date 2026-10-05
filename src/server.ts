@@ -145,7 +145,11 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
 
   // Kick off the selected PR right away so it's (partly) ready when the browser connects,
   // and resolve + fetch every other PR in the queue in parallel (network-bound, off the CPU lane).
-  if (queue[opts.index]) run(queue[opts.index].key, true);
+  // Start the look-ahead too, so the first few `n` presses don't wait on a cold parse cache.
+  if (queue[opts.index]) {
+    run(queue[opts.index].key, true);
+    prefetchAfter(queue[opts.index].key);
+  }
   void warm(queue);
 
   let port = opts.port;

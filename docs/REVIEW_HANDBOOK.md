@@ -40,11 +40,16 @@ Sanity checks:
 
 ```sh
 graph-diff                                         # your review requests → pick one
+graph-diff review --owner 007vasy                  # only requests on your own repos
 graph-diff list --all --repo ethereum/go-ethereum  # or any big public repo
 ```
 
+No review requests to test with? GitHub won't let you request a review from yourself on your own PR.
+In the go-ethereum fork, run **Actions → "dummy review PRs" → Run workflow**: `github-actions[bot]` opens replay
+PRs that request your review (#9–#11 were made this way).
+
 1. Pick a PR in the terminal picker (type to filter). The browser opens.
-   *Expect:* first PR ready in roughly 5–10 s (it downloads the two commits).
+   *Expect:* first PR ready in roughly 5–10 s (it downloads the two commits). The first `n` can take ~2 s while the repo is parsed once.
 2. Spend a few seconds, then press **`n`** repeatedly.
    *Expect:* each next PR appears in **well under a second**. Queue dots turn green as PRs are pre-analysed.
 3. `p` goes back instantly. Click any PR in the left list to jump to it.
