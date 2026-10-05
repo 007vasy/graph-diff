@@ -55,3 +55,17 @@ with nothing to install. GitHub only hosts static files (Pages), so graph-diff h
   (via a `graph-diff://` protocol handler registered by `graph-diff install`). Zero hosting, works for any repo
   the user can clone, and keeps the fast N+1 queue/prefetch flow.
 - Index page on `gh-pages` listing open PRs (newest first) so reviewers can cycle through PRs on Pages too.
+
+## End-to-end test (2026-10-05): fork of go-ethereum
+
+`007vasy/go-ethereum` (public fork), action vendored at `.github/actions/graph-diff`, 8 upstream PRs replayed as PRs #1–#8.
+
+| check | result |
+|---|---|
+| workflow run, 12-file PR (+1093/−67) | ✅ 30 s total: checkout (full history) 10 s · npm ci + build 4 s · analysis 4 s · publish 2 s |
+| 8 PRs opened at once (concurrent publishers) | ✅ all published; Pages builds coalesce (earlier builds cancelled, last one deploys all) |
+| commit status | ✅ `graph-diff: success — fns +35 ~23 −0 · calls +133 −9 · test reach 58%`, Details → `https://007vasy.github.io/go-ethereum/pr/1/` |
+| hosted 3D view | ✅ loads from Pages (static mode) |
+| file list vs GitHub | ✅ identical 12 files as upstream ethereum/go-ethereum#35873 |
+| push to a PR (`synchronize`) | ✅ sticky comment updated in place (still 1 comment), new function flagged as untested |
+| close a PR | ✅ `pr/7` removed from `gh-pages` |
