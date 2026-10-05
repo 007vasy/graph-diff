@@ -69,3 +69,11 @@ with nothing to install. GitHub only hosts static files (Pages), so graph-diff h
 | file list vs GitHub | ✅ identical 12 files as upstream ethereum/go-ethereum#35873 |
 | push to a PR (`synchronize`) | ✅ sticky comment updated in place (still 1 comment), new function flagged as untested |
 | close a PR | ✅ `pr/7` removed from `gh-pages` |
+
+### Re-run on v0.2 (all 11 open PRs, including 3 opened by `github-actions[bot]`)
+
+All 11 runs succeeded, every PR has a `graph-diff` status and a live page; the deployed bundle has the v0.2 UI (depth buttons, file labels).
+
+**Gotcha: PRs from bots / first-time contributors.** GitHub holds their `pull_request` runs as *action_required* until a
+maintainer approves them, so they get no graph link until then. Approve the run in the Actions tab; a maintainer
+closing and reopening the PR also triggers an un-gated run.
