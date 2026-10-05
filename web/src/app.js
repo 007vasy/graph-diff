@@ -49,6 +49,7 @@ const graph = new ForceGraph3D($('graph'), { controlType: 'orbit' })
   .nodeLabel((n) => tooltipHtml(n, true))
   .nodeThreeObject((n) => nodeObject(n))
   .linkColor((l) => linkColor(l))
+  .linkLabel((l) => linkLabel(l))
   .linkOpacity(0.55)
   .linkWidth((l) => (isAdjacent(l) ? 1.6 : l.type === 'call' && l.status !== 'unchanged' ? 0.8 : 0))
   .linkDirectionalArrowLength((l) => (l.type === 'call' ? 3.2 : 0))
@@ -182,6 +183,16 @@ function linkColor(l) {
   if (l.status === 'added') return COLORS.added;
   if (l.status === 'removed') return COLORS.removed;
   return '#5b6573';
+}
+
+function linkLabel(l) {
+  const name = (x) => {
+    const n = typeof x === 'object' ? x : null;
+    return esc(n ? (n.type === 'function' ? n.label : n.file) : String(x));
+  };
+  if (l.type === 'contains') return `<div class="tip"><div class="tip-h"><span class="muted">contains</span><b>${name(l.source)} → ${name(l.target)}</b></div></div>`;
+  const what = { added: ['c-added', 'new call — added in this PR'], removed: ['c-removed', 'removed call — existed before this PR'], unchanged: ['muted', 'existing call (unchanged)'] }[l.status];
+  return `<div class="tip"><div class="tip-h"><b>${name(l.source)} → ${name(l.target)}</b><span class="${what[0]}">${what[1]}</span></div></div>`;
 }
 
 function endId(x) {
@@ -545,6 +556,21 @@ $('files').addEventListener('click', (e) => {
 });
 $('detail-close').addEventListener('click', () => select(null));
 $('help-btn').addEventListener('click', () => ($('help').hidden = !$('help').hidden));
+// Legend: open on first visit, then remember the viewer's choice.
+const legendKey = 'graph-diff:legend-collapsed';
+const setLegend = (collapsed) => {
+  $('legend').classList.toggle('collapsed', collapsed);
+  $('legend-toggle').textContent = collapsed ? 'Legend ▸' : 'Legend ▾';
+  try {
+    localStorage.setItem(legendKey, collapsed ? '1' : '0');
+  } catch {}
+};
+try {
+  setLegend(localStorage.getItem(legendKey) === '1');
+} catch {
+  setLegend(false);
+}
+$('legend-toggle').addEventListener('click', () => setLegend(!$('legend').classList.contains('collapsed')));
 $('prev').addEventListener('click', () => loadPr(state.index - 1));
 $('mprev').addEventListener('click', () => loadPr(state.index - 1));
 $('mnext').addEventListener('click', () => loadPr(state.index + 1));

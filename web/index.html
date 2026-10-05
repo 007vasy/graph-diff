@@ -56,13 +56,29 @@
       <div id="detail-body"></div>
     </section>
     <div id="legend">
-      <span><i class="dot added"></i>added</span>
-      <span><i class="dot modified"></i>modified</span>
-      <span><i class="dot removed"></i>removed</span>
-      <span><i class="dot unchanged"></i>context</span>
-      <span><i class="ring"></i>no test reach</span>
-      <span class="folders-only"><i class="cube file"></i>file</span>
-      <span class="folders-only"><i class="cube folder"></i>folder</span>
+      <button id="legend-toggle" title="Show / hide legend">Legend ▾</button>
+      <div id="legend-body">
+        <h4>Nodes</h4>
+        <ul>
+          <li><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="var(--added)"/></svg><span><b>Added</b> function / method</span></li>
+          <li><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="var(--modified)"/></svg><span><b>Modified</b> — size ∝ lines changed</span></li>
+          <li><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="var(--removed)"/></svg><span><b>Removed</b> function / method</span></li>
+          <li><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4" fill="var(--unchanged)" opacity=".7"/></svg><span><b>Context</b> — unchanged, calls or is called by a change (fainter = further away)</span></li>
+          <li><svg viewBox="0 0 16 16"><polygon points="8,2 14,6 12,13 4,13 2,6" fill="var(--modified)"/></svg><span><b>‹file.go›</b> top-level code of a file (imports, globals, consts)</span></li>
+          <li><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--removed)" stroke-width="2"/></svg><span><b>Red ring</b> — changed, but no test reaches it</span></li>
+          <li class="folders-only"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" fill="var(--file)"/></svg><span><b>File</b></span></li>
+          <li class="folders-only"><svg viewBox="0 0 16 16"><polygon points="8,1 15,8 8,15 1,8" fill="var(--folder)"/></svg><span><b>Folder</b></span></li>
+        </ul>
+        <h4>Edges</h4>
+        <ul>
+          <li><svg viewBox="0 0 28 16"><line x1="2" y1="8" x2="20" y2="8" stroke="var(--added)" stroke-width="2"/><polygon points="20,4 27,8 20,12" fill="var(--added)"/><circle cx="10" cy="8" r="2" fill="#fff"/></svg><span><b>New call</b> added by this PR (moving dots)</span></li>
+          <li><svg viewBox="0 0 28 16"><line x1="2" y1="8" x2="20" y2="8" stroke="var(--removed)" stroke-width="2"/><polygon points="20,4 27,8 20,12" fill="var(--removed)"/></svg><span><b>Removed call</b> — existed before, gone now</span></li>
+          <li><svg viewBox="0 0 28 16"><line x1="2" y1="8" x2="20" y2="8" stroke="#5b6573" stroke-width="1.5"/><polygon points="20,5 26,8 20,11" fill="#5b6573"/></svg><span><b>Existing call</b>; arrow points caller → callee</span></li>
+          <li><svg viewBox="0 0 28 16"><line x1="2" y1="8" x2="20" y2="8" stroke="#fff" stroke-width="2"/><polygon points="20,4 27,8 20,12" fill="#fff"/></svg><span>Calls of the <b>hovered / selected</b> node</span></li>
+          <li class="folders-only"><svg viewBox="0 0 28 16"><line x1="2" y1="8" x2="26" y2="8" stroke="#2a3646" stroke-width="2"/></svg><span><b>Contains</b> — folder → file → function</span></li>
+        </ul>
+        <p class="muted">Hover any node or edge for details.</p>
+      </div>
     </div>
   </main>
 
