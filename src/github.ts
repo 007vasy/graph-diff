@@ -80,6 +80,8 @@ export interface ListOptions {
   owner?: string;
   author?: string;
   limit?: number;
+  /** look at someone else's queue (GitHub login) instead of @me; only PRs your token can see are returned */
+  as?: string;
 }
 
 /** PRs awaiting my review, or (with `all`) all open PRs in a repo / owner / involving me. */
@@ -101,8 +103,9 @@ export async function listPrs(opts: ListOptions): Promise<PrInfo[]> {
     return list.map((p) => fromSearch({ ...p, repository: { nameWithOwner: `${owner}/${repo}` } }));
   }
   const args = ['search', 'prs', '--state=open', '--limit', limit, '--json', SEARCH_FIELDS, '--sort', 'updated'];
-  if (!opts.all) args.push('--review-requested=@me');
-  else if (!opts.owner) args.push('--involves=@me');
+  const who = opts.as ?? '@me';
+  if (!opts.all) args.push(`--review-requested=${who}`);
+  else if (!opts.owner || opts.as) args.push(`--involves=${who}`);
   if (opts.owner) args.push(`--owner=${opts.owner}`);
   if (opts.repo) args.push(`--repo=${opts.repo}`);
   if (opts.author) args.push(`--author=${opts.author}`);
@@ -187,4 +190,67 @@ export async function remoteUrl(owner: string, repo: string) {
     ? Promise.resolve(process.env.GRAPH_DIFF_GIT_PROTOCOL)
     : pexec('gh', ['config', 'get', 'git_protocol']).then((r) => r.stdout.trim(), () => 'https');
   return !useHttps && (await protocol) === 'ssh' ? `git@github.com:${owner}/${repo}.git` : `https://github.com/${owner}/${repo}.git`;
+}
+
+/** Throws a friendly error when a GitHub login doesn't exist. */
+export async function assertUser(login: string): Promise<void> {
+  try {
+    await gh(['api', `users/${encodeURIComponent(login)}`]);
+  } catch (e) {
+    if (/404|Not Found/i.test(String((e as Error).message))) throw new Error(`GitHub user "${login}" not found.`);
+    throw e;
+  }
+}
+
+export interface ReviewerLoad {
+  login: string;
+  /** open, non-draft PRs where this user's review is currently requested */
+  pending: number;
+  /** example PR numbers */
+  prs: number[];
+}
+
+/**
+ * Rank who has the most pending review requests in a repo, among its open PRs. Good demo targets for `--as`.
+ * Team requests are counted separately (they don't map to one person's queue).
+ */
+export async function topReviewers(repo: string, scan = 200): Promise<{ users: ReviewerLoad[]; teams: ReviewerLoad[]; scanned: number }> {
+  const [owner, name] = repo.split('/');
+  type Req = { users: string[]; teams: string[]; number: number; draft: boolean };
+  let reqs: Req[];
+  try {
+    const list = await gh<any[]>([
+      'pr', 'list', '-R', repo, '--state', 'open', '--limit', String(scan), '--json', 'number,isDraft,reviewRequests',
+    ]);
+    reqs = list.map((p) => ({
+      number: p.number,
+      draft: p.isDraft,
+      users: p.reviewRequests.filter((r: any) => r.login).map((r: any) => r.login),
+      teams: p.reviewRequests.filter((r: any) => !r.login && (r.slug || r.name)).map((r: any) => r.slug ?? r.name),
+    }));
+  } catch (e) {
+    if (!isSso(e)) throw e;
+    warnSso(owner);
+    const list = await publicApi<any[]>(`repos/${owner}/${name}/pulls?state=open&per_page=100`);
+    reqs = list.map((p) => ({
+      number: p.number,
+      draft: p.draft,
+      users: (p.requested_reviewers ?? []).map((r: any) => r.login),
+      teams: (p.requested_teams ?? []).map((t: any) => t.slug),
+    }));
+  }
+  const tally = (key: 'users' | 'teams') => {
+    const m = new Map<string, ReviewerLoad>();
+    for (const r of reqs) {
+      if (r.draft) continue;
+      for (const login of r[key]) {
+        const e = m.get(login) ?? { login, pending: 0, prs: [] };
+        e.pending++;
+        if (e.prs.length < 5) e.prs.push(r.number);
+        m.set(login, e);
+      }
+    }
+    return [...m.values()].sort((a, b) => b.pending - a.pending);
+  };
+  return { users: tally('users'), teams: tally('teams'), scanned: reqs.length };
 }

@@ -62,6 +62,15 @@ graph-diff local --base main --head HEAD          # inside any git repo, no GitH
 graph-diff local --coverage coverage/lcov.info    # adds lcov line coverage of new lines
 ```
 
+## 3b. Demo with a real, busy reviewer (1 min)
+
+```sh
+graph-diff reviewers ethereum/go-ethereum           # e.g. 69  rjl493456442, 52  fjl, …
+graph-diff review --as rjl493456442 --repo ethereum/go-ethereum
+```
+*Expect:* the queue header reads "Review queue of @rjl493456442"; real PRs by real authors; `n` cycles them.
+`--as` shows only PRs your token can see (public repos for other people). An unknown login gives a clear error.
+
 ## 4. Add it to a repo (1 min)
 
 Copy `examples/graph-diff.yml` to `.github/workflows/`, open a PR, then:

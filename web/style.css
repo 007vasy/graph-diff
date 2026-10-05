@@ -185,3 +185,6 @@ body.static #refresh { display: none; }
 #help dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0 0 10px; }
 #help dt { white-space: nowrap; } #help dd { margin: 0; color: var(--muted); }
 #help p { margin: 0; }
+
+#queue-label { padding: 0 14px 8px; color: var(--accent); font-size: 12px; font-weight: 600; }
+#queue-label[hidden] { display: none; }

@@ -28,6 +28,8 @@ export interface ServerOptions {
   port: number;
   analyze: AnalyzeOptions;
   initialDepth: number;
+  /** shown above the PR queue, e.g. "Review queue of @alice" */
+  label?: string;
   refresh?: () => Promise<PrInfo[]>;
 }
 
@@ -107,7 +109,7 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
           queue = await opts.refresh();
           void warm(queue);
         }
-        return json(res, 200, { queue, index: opts.index, initialDepth: opts.initialDepth });
+        return json(res, 200, { queue, index: opts.index, initialDepth: opts.initialDepth, label: opts.label });
       case '/api/graph': {
         const job = run(key, true);
         try {

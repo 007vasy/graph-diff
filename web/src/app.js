@@ -43,7 +43,7 @@ const state = {
 const graph = new ForceGraph3D($('graph'), { controlType: 'orbit' })
   .backgroundColor('rgba(0,0,0,0)') // CSS gradient shows through
   .showNavInfo(false)
-  .warmupTicks(80) // lay out before first paint so the camera can frame it immediately
+  .warmupTicks(10) // a little pre-layout (~40ms) so first paint isn't a point cloud; the rest animates in
   .cooldownTime(5000)
   .nodeId('id')
   .nodeLabel((n) => tooltipHtml(n, true))
@@ -634,6 +634,10 @@ document.addEventListener('keydown', (e) => {
 (async () => {
   const q = await (await api.queue()).json();
   state.queue = q.queue;
+  if (q.label) {
+    $('queue-label').textContent = q.label;
+    $('queue-label').hidden = false;
+  }
   if (STATIC) document.body.classList.add('static');
   if (STATIC && state.queue.length === 1) document.body.classList.add('single');
   setDepth(q.initialDepth ?? 1);

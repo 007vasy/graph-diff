@@ -57,7 +57,10 @@ Language: **TypeScript on Node ≥ 20**, shipped as an npm package with a `graph
 
 ```
 graph-diff                         # = graph-diff review
-graph-diff review [--owner u] [--repo o/r]   # PRs where review is requested from me (optionally one user/org/repo)
+graph-diff review [--owner u] [--repo o/r] [--as login]
+                                   # PRs where review is requested from me, or from <login> (demos;
+                                   # only PRs the token can see, i.e. public ones for other people)
+graph-diff reviewers <owner/repo>  # rank users by pending review requests on open (non-draft) PRs
 graph-diff list [--all] [--repo o/r] [--author @me] [--limit 50]
                                    # --all: every open PR I can see (in --repo, or the current repo,
                                    #        or across my account via `gh search prs --involves @me`)

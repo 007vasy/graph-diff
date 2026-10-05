@@ -24,6 +24,8 @@ graph-diff                                # PRs waiting for your review → pick
 graph-diff list --all --repo owner/repo   # all open PRs of a repo
 graph-diff list --all --owner my-org      # all open PRs of an org
 graph-diff open owner/repo#123 https://github.com/o/r/pull/45
+graph-diff reviewers ethereum/go-ethereum      # who has the most pending review requests
+graph-diff review --as rjl493456442 --repo ethereum/go-ethereum   # demo with a busy maintainer's real queue
 graph-diff local --base main --head HEAD  # two local refs, no GitHub needed (auto-uses coverage/lcov.info)
 graph-diff export -o site/ owner/repo#123 # static site for hosting
 ```

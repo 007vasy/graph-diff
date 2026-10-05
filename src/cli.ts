@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { currentRepo, listPrs, parsePrRef, prKey, type ListOptions } from './github.js';
+import { assertUser, currentRepo, listPrs, parsePrRef, prKey, topReviewers, type ListOptions } from './github.js';
 import { git } from './git.js';
 import { startServer } from './server.js';
 import type { PrInfo } from './types.js';
@@ -33,10 +33,11 @@ function common(cmd: Command) {
     .option('--no-cache', 'ignore cached analyses');
 }
 
-async function serve(queue: PrInfo[], index: number, o: Common, refresh?: () => Promise<PrInfo[]>) {
+async function serve(queue: PrInfo[], index: number, o: Common, refresh?: () => Promise<PrInfo[]>, label?: string) {
   const { url } = await startServer({
     queue,
     index,
+    label,
     port: Number(o.port),
     initialDepth: Number(o.depth),
     refresh,
@@ -54,7 +55,7 @@ async function serve(queue: PrInfo[], index: number, o: Common, refresh?: () => 
   }
 }
 
-async function pick(prs: PrInfo[]): Promise<number> {
+async function pick(prs: PrInfo[], whose = 'a'): Promise<number> {
   if (!process.stdin.isTTY) {
     // Non-interactive (piped / CI): print the queue and start at the first PR.
     const w = Math.max(...prs.map((p) => p.key.length));
@@ -69,24 +70,32 @@ async function pick(prs: PrInfo[]): Promise<number> {
     name: `${p.key.padEnd(width)}  ${p.isDraft ? '[draft] ' : ''}${p.title}  — @${p.author}`,
   }));
   return search({
-    message: `Pick a PR (${prs.length}; type to filter)`,
+    message: `Pick ${whose} PR (${prs.length}; type to filter)`,
     pageSize: 20,
     source: (term) => (term ? choices.filter((c) => c.name.toLowerCase().includes(term.toLowerCase())) : choices),
   });
 }
 
 async function listAndServe(opts: ListOptions, o: Common) {
+  if (opts.as) await assertUser(opts.as);
   const fetch = () => listPrs(opts);
   const tty = process.stderr.isTTY;
   if (tty) process.stderr.write('Fetching pull requests…\r');
   const prs = await fetch();
   if (tty) process.stderr.write('\x1b[2K');
+  const who = opts.as ? `@${opts.as}` : 'you';
   if (!prs.length) {
-    console.log(opts.all ? 'No open pull requests found.' : 'No pull requests are waiting for your review. 🎉  (try `graph-diff list --all`)');
+    console.log(
+      opts.all
+        ? 'No open pull requests found.'
+        : `No pull requests are waiting for ${opts.as ? `@${opts.as}'s` : 'your'} review.${opts.as ? '' : ' 🎉  (try `graph-diff list --all`)'}`,
+    );
     return;
   }
-  const index = await pick(prs);
-  await serve(prs, index, o, fetch);
+  const label = opts.all ? (opts.as ? `Open PRs involving @${opts.as}` : undefined) : `Review queue of ${opts.as ? '@' + opts.as : 'you'}`;
+  if (opts.as) console.log(`${opts.all ? 'Open PRs involving' : 'Waiting for review from'} ${who} (public PRs + what your token can see):`);
+  const index = await pick(prs, opts.as ? `from @${opts.as}'s` : opts.all ? 'a' : 'from your');
+  await serve(prs, index, o, fetch, label);
 }
 
 const fail = (e: unknown) => {
@@ -97,20 +106,22 @@ const fail = (e: unknown) => {
 common(program.command('review', { isDefault: true }).description('PRs where your review is requested (default)'))
   .option('--repo <owner/repo>', 'limit to one repository')
   .option('--owner <user-or-org>', 'limit to repositories of one user / org')
+  .option('--as <login>', "use someone else's review queue (e.g. a busy maintainer, for demos)")
   .option('--limit <n>', 'max PRs', '50')
-  .action((o) => listAndServe({ repo: o.repo, owner: o.owner, limit: Number(o.limit) }, o).catch(fail));
+  .action((o) => listAndServe({ repo: o.repo, owner: o.owner, as: o.as, limit: Number(o.limit) }, o).catch(fail));
 
 common(program.command('list').description('List open PRs and pick one'))
   .option('--all', 'all open PRs (in --repo / the current repo / --owner / involving you)')
   .option('--repo <owner/repo>', 'repository')
   .option('--owner <org>', 'all open PRs in an org/user')
   .option('--author <login>', 'filter by author')
+  .option('--as <login>', 'open PRs involving someone else instead of you')
   .option('--limit <n>', 'max PRs', '50')
   .action(async (o) => {
     try {
       let repo = o.repo;
-      if (o.all && !repo && !o.owner) repo = await currentRepo();
-      await listAndServe({ all: o.all ?? !!(repo || o.owner), repo, owner: o.owner, author: o.author, limit: Number(o.limit) }, o);
+      if (o.all && !repo && !o.owner && !o.as) repo = await currentRepo();
+      await listAndServe({ all: o.all ?? !!(repo || o.owner || o.as), repo, owner: o.owner, author: o.author, as: o.as, limit: Number(o.limit) }, o);
     } catch (e) {
       fail(e);
     }
@@ -139,6 +150,25 @@ common(program.command('local').description('Diff two refs of the git repo in th
       const cwd = (await git(process.cwd(), ['rev-parse', '--show-toplevel'])).trim();
       if (!o.coverage && existsSync(join(cwd, 'coverage', 'lcov.info'))) o.coverage = join(cwd, 'coverage', 'lcov.info');
       await serve([{ key: `local:${o.base}..${o.head}`, title: `${o.base} … ${o.head}`, local: { cwd, base: o.base, head: o.head } }], 0, o);
+    } catch (e) {
+      fail(e);
+    }
+  });
+
+program
+  .command('reviewers <owner/repo>')
+  .description('Who has the most pending review requests in a repo (good `review --as` demo targets)')
+  .option('--top <n>', 'how many to show', '10')
+  .action(async (repo: string, o) => {
+    try {
+      const { users, teams, scanned } = await topReviewers(repo);
+      const top = users.slice(0, Number(o.top));
+      if (!top.length) return console.log(`No pending user review requests on the ${scanned} open PRs of ${repo}.`);
+      console.log(`Pending review requests on ${scanned} open PRs of ${repo} (drafts excluded):\n`);
+      const w = Math.max(...top.map((u) => u.login.length));
+      for (const u of top) console.log(`  ${String(u.pending).padStart(3)}  ${u.login.padEnd(w)}  e.g. #${u.prs.join(', #')}`);
+      if (teams.length) console.log(`\n  teams: ${teams.slice(0, 5).map((t) => `${t.login} (${t.pending})`).join(', ')}`);
+      console.log(`\nDemo:  graph-diff review --as ${top[0].login} --repo ${repo}`);
     } catch (e) {
       fail(e);
     }
