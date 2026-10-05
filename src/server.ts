@@ -2,7 +2,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { analyze, type AnalyzeOptions } from './analyze.js';
+import { analyze, warmQueue, type AnalyzeOptions } from './analyze.js';
+
+const LOOKAHEAD = 3;
 import type { GraphPayload, PrInfo } from './types.js';
 
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
@@ -33,41 +35,63 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
   let queue = opts.queue;
   const jobs = new Map<string, Job>();
   const recent: string[] = []; // keys of completed jobs, most recent last (memory bound)
-  let chain: Promise<unknown> = Promise.resolve(); // analyses run one at a time
+  // Analyses are CPU-bound and run one at a time; on-demand requests jump ahead of prefetches.
+  const waiting: Array<{ key: string; start: () => void }> = [];
+  let busy = false;
+  const pump = () => {
+    if (busy || !waiting.length) return;
+    busy = true;
+    waiting.shift()!.start();
+  };
 
   const run = (key: string, priority: boolean): Job => {
     const existing = jobs.get(key);
-    if (existing && existing.state !== 'error') return existing;
+    if (existing && existing.state !== 'error') {
+      // Promote a queued prefetch when the user asks for it.
+      const i = waiting.findIndex((w) => w.key === key);
+      if (priority && i > 0) waiting.unshift(...waiting.splice(i, 1));
+      return existing;
+    }
     const pr = queue.find((p) => p.key === key);
     if (!pr) throw new Error(`Unknown PR ${key}`);
     const job: Job = { state: 'pending', message: priority ? 'Queued…' : 'Prefetching…', promise: null as any };
-    const exec = () =>
-      analyze(pr, { ...opts.analyze, onProgress: (m) => (job.message = m) }).then(
-        (p) => {
-          Object.assign(pr, { title: p.pr.title, author: p.pr.author, url: p.pr.url, isDraft: p.pr.isDraft });
-          job.state = 'done';
-          job.message = 'Done';
-          recent.push(key);
-          while (recent.length > 8) jobs.delete(recent.shift()!);
-          return p;
-        },
-        (e) => {
-          job.state = 'error';
-          job.error = job.message = String(e?.message ?? e);
-          throw e;
-        },
-      );
-    job.promise = chain.then(exec, exec);
-    chain = job.promise.catch(() => {});
+    job.promise = new Promise<GraphPayload>((resolve, reject) => {
+      const start = () =>
+        analyze(pr, { ...opts.analyze, onProgress: (m) => (job.message = m) })
+          .then(
+            (p) => {
+              Object.assign(pr, { title: p.pr.title, author: p.pr.author, url: p.pr.url, isDraft: p.pr.isDraft });
+              job.state = 'done';
+              job.message = 'Done';
+              recent.push(key);
+              while (recent.length > 12) jobs.delete(recent.shift()!);
+              resolve(p);
+            },
+            (e) => {
+              job.state = 'error';
+              job.error = job.message = String(e?.message ?? e);
+              reject(e);
+            },
+          )
+          .finally(() => {
+            busy = false;
+            pump();
+          });
+      if (priority) waiting.unshift({ key, start });
+      else waiting.push({ key, start });
+    });
+    job.promise.catch(() => {});
     jobs.set(key, job);
+    pump();
     return job;
   };
 
+  // Analyse the next few PRs in the background so `n` is instant even for fast reviewers.
   const prefetchAfter = (key: string) => {
     const i = queue.findIndex((p) => p.key === key);
-    const next = queue[i + 1];
-    if (next && !jobs.has(next.key)) run(next.key, false);
+    for (const next of queue.slice(i + 1, i + 1 + LOOKAHEAD)) if (!jobs.has(next.key)) run(next.key, false);
   };
+  const warm = (q: PrInfo[]) => warmQueue(q).catch(() => {});
 
   const json = (res: ServerResponse, code: number, body: unknown) => {
     res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -79,7 +103,10 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     const key = url.searchParams.get('key') ?? '';
     switch (url.pathname) {
       case '/api/queue':
-        if (url.searchParams.has('refresh') && opts.refresh) queue = await opts.refresh();
+        if (url.searchParams.has('refresh') && opts.refresh) {
+          queue = await opts.refresh();
+          void warm(queue);
+        }
         return json(res, 200, { queue, index: opts.index, initialDepth: opts.initialDepth });
       case '/api/graph': {
         const job = run(key, true);
@@ -116,8 +143,10 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     handle(req, res).catch((e) => json(res, 500, { error: String(e?.message ?? e) }));
   });
 
-  // Kick off the selected PR right away so it's (partly) ready when the browser connects.
+  // Kick off the selected PR right away so it's (partly) ready when the browser connects,
+  // and resolve + fetch every other PR in the queue in parallel (network-bound, off the CPU lane).
   if (queue[opts.index]) run(queue[opts.index].key, true);
+  void warm(queue);
 
   let port = opts.port;
   for (;;) {

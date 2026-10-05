@@ -9,7 +9,7 @@ import { langForPath } from './parser/index.js';
 import { extractMany, type ParseItem } from './parser/pool.js';
 import type { FileChange, FnNode, GraphPayload, PrInfo } from './types.js';
 
-const ANALYSIS_VERSION = 3;
+const ANALYSIS_VERSION = 4;
 const MAX_FILE_BYTES = 512 * 1024;
 
 const EXCLUDE =
@@ -24,6 +24,36 @@ export interface AnalyzeOptions {
 }
 
 export type Timings = Record<string, number>;
+
+/**
+ * Network warm-up for a PR queue: resolve all PRs concurrently, then fetch every needed commit
+ * with one `git fetch` per repo. Mutates queue items in place (adds baseSha/headSha), so later
+ * `analyze()` calls skip both network steps. Errors are left for `analyze()` to report.
+ */
+export async function warmQueue(queue: PrInfo[], onResolved?: (pr: PrInfo) => void) {
+  const pending = queue.filter((p) => !p.local && !(p.baseSha && p.headSha));
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(6, pending.length) }, async () => {
+      while (i < pending.length) {
+        const pr = pending[i++];
+        try {
+          Object.assign(pr, await resolvePr(pr));
+          onResolved?.(pr);
+        } catch {}
+      }
+    }),
+  );
+  const byRepo = new Map<string, PrInfo[]>();
+  for (const p of queue) if (!p.local && p.baseSha && p.headSha) (byRepo.get(`${p.owner}/${p.repo}`) ?? byRepo.set(`${p.owner}/${p.repo}`, []).get(`${p.owner}/${p.repo}`)!).push(p);
+  await Promise.all(
+    [...byRepo].map(async ([, prs]) => {
+      const { owner, repo } = prs[0];
+      const dir = await ensureRepo(owner!, repo!, await remoteUrl(owner!, repo!));
+      await fetchCommits(dir, prs.flatMap((p) => [p.baseSha!, p.headSha!])).catch(() => {});
+    }),
+  );
+}
 
 /**
  * Parse cache shared across base/head and across PRs: key = path@blob.

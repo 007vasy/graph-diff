@@ -18,6 +18,10 @@ import type { LcovData } from './coverage.js';
 export const MAX_DEPTH = 6;
 const MAX_NODES = 4000;
 const MAX_PATCH_LINES = 400;
+/** Context nodes with more call-graph neighbours than this are shown but not expanded (keeps depth ≥2 readable). */
+const HUB_DEGREE = 25;
+/** Max neighbours pulled in from any single node; changed neighbours always come first. */
+const MAX_FANOUT = 60;
 
 export interface DiffOptions {
   pr: PrInfo;
@@ -91,10 +95,14 @@ export function diffGraphs(base: CallGraph, head: CallGraph, opts: DiffOptions):
     }
   }
   let reachedDepth = 0;
+  const isChanged = (id: string) => status.get(id) !== 'unchanged';
   for (let d = 1; d <= MAX_DEPTH && frontier.length && depth.size < MAX_NODES; d++) {
     const next: string[] = [];
     for (const id of frontier) {
-      for (const nb of adj.get(id) ?? []) {
+      const nbs = adj.get(id) ?? [];
+      if (!isChanged(id) && nbs.length > HUB_DEGREE) continue; // hub: visible, not expanded
+      const ordered = nbs.length > MAX_FANOUT ? [...nbs.filter(isChanged), ...nbs.filter((x) => !isChanged(x))].slice(0, MAX_FANOUT) : nbs;
+      for (const nb of ordered) {
         if (depth.has(nb) || depth.size >= MAX_NODES) continue;
         depth.set(nb, d);
         next.push(nb);
@@ -165,6 +173,7 @@ export function diffGraphs(base: CallGraph, head: CallGraph, opts: DiffOptions):
       line: fn.startLine,
       depth: d,
       isTest: test,
+      degree: (adj.get(id)?.length ?? 0) > HUB_DEGREE ? adj.get(id)!.length : undefined,
     };
     if (s !== 'unchanged') {
       const p = fnPatch(b, h);

@@ -1,0 +1,33 @@
+# Copy to .github/workflows/graph-diff.yml in the repository you want to review.
+# Then: Settings → Pages → "Deploy from a branch" → gh-pages / (root).
+name: graph-diff
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+
+permissions:
+  contents: write       # push the per-PR site to gh-pages
+  pull-requests: write  # sticky comment
+  statuses: write       # "graph-diff" commit status with the Details link
+
+# One publisher at a time per repo; a newer push to the same PR cancels the older run.
+concurrency:
+  group: graph-diff-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  graph-diff:
+    # Fork PRs get a read-only token on `pull_request`; see docs/GITHUB_INTEGRATION.md for the
+    # two-workflow (artifact + workflow_run) variant that also covers forks.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Optional: run tests with coverage first and pass `coverage: coverage/lcov.info`.
+      - uses: 007vasy/graph-diff@main
+        with:
+          comment: 'true'
+          status: 'true'

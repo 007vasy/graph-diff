@@ -281,7 +281,7 @@ function tooltipHtml(n, hover) {
   if (n.type === 'file') {
     return `<div class="tip"><div class="tip-h"><b>${esc(n.file)}</b><span class="muted"><span class="badge" style="color:${COLORS[n.status]}">${n.status}</span>${n.added != null ? `<span class="c-added">+${n.added}</span> <span class="c-removed">−${n.removed}</span>` : ''}</span></div></div>`;
   }
-  const head = `<div class="tip-h"><b>${esc(n.label)}</b><span class="muted"><span class="badge" style="color:${COLORS[n.status]}">${n.status}</span>${esc(n.file)}:${n.line}${n.isTest ? ' · test' : ''}${n.status !== 'unchanged' ? ` · <span class="c-added">+${n.added}</span> <span class="c-removed">−${n.removed}</span>` : ` · depth ${n.depth}`}</span>${covText(n) ? `<span class="muted">${covText(n)}</span>` : ''}</div>`;
+  const head = `<div class="tip-h"><b>${esc(n.label)}</b><span class="muted"><span class="badge" style="color:${COLORS[n.status]}">${n.status}</span>${esc(n.file)}:${n.line}${n.isTest ? ' · test' : ''}${n.status !== 'unchanged' ? ` · <span class="c-added">+${n.added}</span> <span class="c-removed">−${n.removed}</span>` : ` · depth ${n.depth}`}${n.degree ? ` · hub (${n.degree} links, not expanded)` : ''}</span>${covText(n) ? `<span class="muted">${covText(n)}</span>` : ''}</div>`;
   return `<div class="tip">${head}${patchHtml(n, hover ? HOVER_PATCH_LINES : 0)}</div>`;
 }
 
@@ -431,6 +431,7 @@ async function loadPr(index) {
   renderHeader();
   select(null);
   $('error').hidden = true;
+  $('empty').hidden = true;
   $('loading').hidden = false;
   $('loadmsg').textContent = 'Loading…';
   const poll = setInterval(async () => {
@@ -458,6 +459,12 @@ async function loadPr(index) {
     renderStats();
     renderChanges();
     renderFiles();
+    const codeChanges = state.changed.length;
+    $('empty').hidden = codeChanges > 0;
+    if (!codeChanges) {
+      $('empty').innerHTML = `No function-level changes in supported languages.<br><span class="small">${body.stats.filesChanged} file(s) changed — shown in the file / folder layer. Press <kbd>n</kbd> for the next PR.</span>`;
+      if (!state.folders) $('folders').checked = state.folders = true;
+    }
     applyFilter();
     fitWhenLaidOut(token);
   } catch (e) {
@@ -556,7 +563,7 @@ $('refresh').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.target.matches('input[type=search], input[type=text]') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.matches?.('input[type=search], input[type=text]') || e.metaKey || e.ctrlKey || e.altKey) return;
   const actions = {
     n: () => loadPr(state.index + 1),
     p: () => loadPr(state.index - 1),

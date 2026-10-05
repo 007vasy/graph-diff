@@ -92,6 +92,8 @@ export interface GraphNode {
   covered?: boolean | null;
   lcov?: { covered: number; total: number } | null;
   isTest?: boolean;
+  /** set for hub nodes: number of call-graph neighbours (not expanded beyond) */
+  degree?: number;
 }
 
 export interface GraphLink {

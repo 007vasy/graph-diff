@@ -93,3 +93,18 @@ test('analyzes a local diff end to end', async () => {
   assert.ok(patch.some((l) => l.t === '+' && l.n === 1 && l.s.includes('n()')));
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('lcov coverage of added lines', async () => {
+  const dir = repo(
+    { 'src/m.py': 'def f():\n    return 1\n' },
+    { 'src/m.py': 'def f():\n    x = 1\n    y = 2\n    return x + y\n' },
+  );
+  const lcov = join(dir, 'lcov.info');
+  // line 2 hit, line 3 not hit, line 4 not instrumented
+  writeFileSync(lcov, `SF:${join(dir, 'src/m.py')}\nDA:1,1\nDA:2,4\nDA:3,0\nend_of_record\n`);
+  const p = await analyze({ key: 'l', title: 't', local: { cwd: dir, base: 'main', head: 'feature' } }, { coverage: lcov });
+  const f = p.nodes.find((n) => n.id === 'src/m.py::f')!;
+  assert.deepEqual(f.lcov, { covered: 1, total: 2 });
+  assert.deepEqual(p.stats.coverage.lcov && [p.stats.coverage.lcov.coveredLines, p.stats.coverage.lcov.totalLines], [1, 2]);
+  rmSync(dir, { recursive: true, force: true });
+});

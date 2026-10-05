@@ -63,30 +63,37 @@ graph-diff list [--all] [--repo o/r] [--author @me] [--limit 50]
                                    #        or across my account via `gh search prs --involves @me`)
 graph-diff open <pr>               # <pr> = URL | owner/repo#123 | 123 (current repo)
 graph-diff local [--base main] [--head HEAD]   # diff two local refs in the cwd repo, no GitHub needed
+graph-diff export [pr...] -o <dir> [--base --head --repo --number --url --link]
+                                   # static site (no server) for GitHub Pages / CI, plus summary.md (see §13)
 
 Common options:
   --port <n>          server port (default 7357, auto-increments if busy)
   --no-open           don't launch the browser
   --depth <n>         initial depth (default 1)
   --coverage <file>   lcov.info for the head commit (optional; see §6)
-  --max-files <n>     cap on source files parsed per commit (default 4000)
+  --max-files <n>     cap on source files parsed per commit (default 15000)
+  --include-generated also parse vendored/generated code (excluded by default: vendor/, node_modules/, *.pb.go, generated/ …)
+  --no-cache          ignore the on-disk analysis cache
 ```
 
 Flow for `review` / `list`:
 1. Query PRs through `gh` (JSON output).
-2. If stdin is a TTY, show an interactive picker (title, repo#num, author, +/−). Otherwise print a table.
+2. If stdin is a TTY, show an interactive, type-to-filter picker (repo#num, draft flag, title, author). Otherwise print a table and start at the first PR. (+/− isn't shown: GitHub's search API doesn't return it.)
 3. Start the server with the **whole PR list** as the "queue", select the picked PR, open the browser.
-4. The browser can step through the queue (next/prev) — analyses are computed lazily and the **next PR is pre-fetched in the background**.
+4. **N+1 flow** — the server makes `n` (next PR) instant:
+   - *network warm-up*: all queue PRs are resolved concurrently and **all their commits fetched in one batched `git fetch`** at startup (network lane, independent of analysis);
+   - *look-ahead*: after a PR is served, the next **3** are analysed in the background;
+   - *priority*: an on-demand request jumps ahead of queued prefetches (analyses are CPU-bound and run one at a time).
 
 ## 4. Analysis pipeline
 
-1. **Resolve PR** → `{owner, repo, number, baseSha, headSha, baseRef, headRef, title, author, url}` (via `gh pr view --json`). Base SHA = merge-base of base branch and head (`git merge-base`) so the diff matches GitHub's "Files changed".
-2. **Fetch**: `git clone --bare --filter=blob:none` once into the cache, then `git fetch origin <baseRef> pull/<n>/head`.
+1. **Resolve PR** → `{owner, repo, number, baseSha, headSha, baseRef, headRef, title, author, url}` (via `gh pr view --json`). Base SHA = merge-base from GitHub's compare API (`merge_base_commit`), so the diff matches GitHub's "Files changed" without needing history locally.
+2. **Fetch**: an empty bare repo per GitHub repo in the cache; `git fetch --depth=1 origin <baseSha> <headSha>`: only the two trees, never the history (fast for huge monorepos). Fetches into one repo are serialized (shallow-file lock).
 3. **Changed files**: `git diff --numstat -M base head` → per-file added/removed lines, renames.
-4. **Parse**: for each commit, list source files (`git ls-tree -r`) with supported extensions, read blobs (`git cat-file --batch`), parse with tree-sitter. Unchanged files are parsed once and shared between both sides (keyed by blob SHA).
+4. **Parse**: for each commit, list source files (`git ls-tree -r`) with supported extensions, read blobs (`git cat-file --batch`), parse with tree-sitter in a **worker-thread pool** (≤ 8 workers; in-process below 250 files). Parse results are cached in memory by `path@blob` and shared between base/head and across PRs; function source text is kept only for files in the diff.
 5. **Call graph** per commit (§5).
 6. **Diff** (§5.3) → `GraphDiff`.
-7. Cache result as JSON at `~/.cache/graph-diff/analyses/<owner>_<repo>_<baseSha>_<headSha>.json`.
+7. Cache result as JSON at `~/.cache/graph-diff/analyses/<owner>_<repo>_<baseSha>_<headSha>_v<N>.json`.
 
 ### 4.1 Supported languages (tree-sitter WASM grammars)
 
@@ -109,11 +116,12 @@ type FnId = string;   // "<path>::<Container.>name"  e.g. "src/a.ts::Foo.bar"
 
 interface FnNode {
   id: FnId; name: string; container?: string; file: string; lang: string;
-  kind: 'function' | 'method';
+  kind: 'function' | 'method' | 'module';   // 'module' = synthetic <module> node: top-level code of a file
   startLine: number; endLine: number;
   hash: string;            // hash of body text with whitespace normalised
   code: string;            // source text
-  calls: string[];         // raw callee names from call sites
+  calls: string[];         // "recv|name" ('' = bare call, '?' = complex receiver) or "@tf.address"
+  imports?: string[];      // module nodes: identifiers bound by imports
 }
 
 interface CallGraph { nodes: Map<FnId, FnNode>; edges: Set<`${FnId}->${FnId}`>; }
@@ -121,11 +129,13 @@ interface CallGraph { nodes: Map<FnId, FnNode>; edges: Set<`${FnId}->${FnId}`>; 
 
 ### 5.1 Call resolution (heuristic, static, untyped)
 
-For a call to `name` (identifier, or the property of a member call `x.name(...)`):
-1. Same container (method of the same class) → that method.
-2. Same file → definition with that name.
-3. Otherwise all definitions with that name repo-wide **if ≤ 3 candidates** (avoids noise from `get`, `map`, ...).
-4. Unresolved calls (library/builtin) are dropped.
+For a call `recv.name(...)` / `name(...)` (precision over recall: a missing edge is better than a wrong one):
+1. `this/self/super` (and Go receiver variables) or a bare call inside a class → method of the same container.
+2. `Type.method()` / `Type::new()` / `new Type()` / `Lib.fn()` → method of that container.
+3. Bare call → same file, then a type name → its constructor (`constructor`, `__init__`, `new`).
+4. Global by name, with filters: production code never links into test/mock files; `pkg.Fn()` prefers functions in a directory/file named `pkg`; a receiver that is an **imported package not found in the repo** is external (dropped); bare calls prefer the same directory (Go package).
+5. Member calls on unknown receivers (`x.Close()`, `a.b.c()`) link only to methods, only for ≤ 2 candidates, and never for ubiquitous names (`Lock`, `Close`, `String`, `Error`, `New`, …).
+6. Otherwise ≤ 3 candidates repo-wide; else dropped. Terraform references resolve by address within the same directory (module).
 
 ### 5.2 Function identity across commits
 
@@ -156,7 +166,9 @@ interface GraphPayload {
 }
 ```
 
-Server includes functions up to `maxDepth = 6` hops (undirected BFS over the union of base+head call edges) from changed functions; the UI filters by the current depth without a round-trip.
+Server includes functions up to `maxDepth = 6` hops (undirected BFS over the union of base+head call edges) from changed functions, capped at 4000 nodes (nearest first); the UI filters by the current depth without a round-trip.
+
+**Hub damping** (keeps depth ≥ 2 readable): context functions with > 25 call-graph neighbours are shown but not expanded (tooltip: "hub (N links)"); any single node pulls in ≤ 60 neighbours, changed ones first. On a chainlink PR this took depth 2 from ~1,880 to 109 functions.
 
 ## 6. Stats & coverage
 
@@ -191,6 +203,8 @@ Layout: **left** PR queue · **centre** 3D graph · **right** stats + controls �
 - Search box to filter/focus a function by name.
 - Status filter checkboxes (added / removed / modified / context).
 - Loading state per PR with progress messages streamed from the server.
+- Queue status dots (prefetched / analysing / error), `?` shortcut sheet, empty state for PRs without function-level changes (folder layer switched on), responsive layout (queue folds into a top-bar prev/next below 980px).
+- Changed-function list (j/k order) and changed-file list in the side panel; click to fly to the node.
 
 ## 8. HTTP API
 
@@ -198,28 +212,58 @@ Layout: **left** PR queue · **centre** 3D graph · **right** stats + controls �
 |---|---|---|
 | GET | `/api/queue` | PR list (queue) + current index |
 | GET | `/api/graph?key=<prKey>` | `GraphPayload` (computes or reads cache) |
-| GET | `/api/prefetch?key=<prKey>` | starts background analysis, returns 202 |
 | GET | `/api/status?key=<prKey>` | analysis progress text |
+| GET | `/api/statuses` | state of every known analysis (queue dots) |
+| GET | `/api/queue?refresh=1` | re-runs the PR listing |
+
+Prefetching is automatic (§3), so there is no explicit prefetch endpoint.
 
 ## 9. Error handling
 - `gh` missing / not authenticated → clear message with `gh auth login` hint.
 - Grammar parse failures on a file → file skipped, counted in `stats.skippedFiles`.
-- Huge repos → `--max-files` cap; only files within changed directories + direct importers are prioritised when capped.
+- Huge repos → `--max-files` cap; files in the diff and their directory neighbourhood are kept first when capped.
+- `gh` blocked by org **SAML SSO** (token not authorized) → for public repos fall back to the anonymous REST API (60 req/h) + anonymous HTTPS fetch, with a one-time warning explaining how to authorize the token.
 
 ## 10. Performance
 
-Benchmarked on PRs of a large monorepo (`smartcontractkit/chainlink`, Go + Solidity, ~10k source files). Targets:
+Benchmarked on PRs of a large monorepo (`smartcontractkit/chainlink`, Go; ~3.2k source files parsed per commit after excluding generated code). Targets:
 - cold analysis (repo already cloned) of a typical PR < 30 s; warm (parse cache hot, next PR in same repo) < 10 s; cached result < 200 ms.
-- Techniques: blob-SHA keyed parse cache shared by base/head and across PRs, `git cat-file --batch` streaming, tree-cursor walk that only materialises interesting nodes, background prefetch of the next PR.
+- Techniques: blob-SHA keyed parse cache shared by base/head and across PRs, worker-thread parsing, numeric node-type dispatch (no type strings out of WASM), `git cat-file --batch` streaming, indexed call resolution, shallow 2-commit fetches, queue warm-up and 3-PR look-ahead.
+- Measured (see BENCHMARKS.md): single PR 18.3 s → **2.4 s** (parse 10.1 s → 1.1 s; call graph 4.5 s → 0.8 s). In the browser, cycling 7 never-seen PRs with 1.5 s per PR: first PR 6.7 s (cold network), then **87–350 ms per `n`**.
 - `npm run bench -- <owner/repo> [n]` prints a per-phase timing table (fetch, ls-tree, read blobs, parse, graph, diff, payload) to `BENCHMARKS.md`.
 
 ## 11. Testing
 - Unit tests (node:test) for: parser extraction per language, call resolution, diff classification, stats.
-- Fixture-based end-to-end test: create a temp git repo with two commits, run `local` analysis, assert payload.
+- Fixture-based end-to-end test: create a temp git repo with two commits, run `local` analysis, assert payload; lcov line coverage of added lines.
+- Browser checks (headless Chrome / Claude in Chrome): hover diff tooltip, folder layer, depth, N+1 timing, static export.
+- `scripts/publish-pages.sh` tested against a local bare remote incl. concurrent publishers.
 
-## 12. Milestones
+## 12. Milestones (all done for v0.1)
 1. Spec (this file) + repo scaffold on GitHub.
 2. Parser + call graph + diff + tests.
 3. Git/GitHub integration + CLI picker.
 4. Server + 3D UI (hover diff, depth, folder layer, stats, cycling).
 5. Coverage, caching, prefetch, polish, README.
+
+## 13. GitHub integration (one click from the PR)
+
+See [docs/GITHUB_INTEGRATION.md](docs/GITHUB_INTEGRATION.md) for the options analysis. Implemented: composite action `action.yml`:
+`graph-diff export` in the checkout → publish to `gh-pages/pr/<n>/` → **commit status `graph-diff` with a Details link** (one click from the PR checks box) + sticky stats comment; removed on PR close.
+Private repos are never published to (possibly public) Pages without explicit opt-in; they get a private artifact + job summary instead.
+
+## 14. Conformance audit (v0.1)
+
+| Spec item | Status | Notes |
+|---|---|---|
+| G1 list review-requested / all open PRs | ✅ | `review` (default), `list --all [--repo/--owner]`, `involves:@me` fallback; verified against a real account |
+| G2 pick a PR, next/prev in browser | ✅ | TTY type-to-filter picker; `n`/`p`, buttons, queue list |
+| G3 parse base + head into AST / call graph | ✅ | 7 languages + Java; tree-sitter WASM |
+| G4 function & edge diff statuses | ✅ | renames mapped; per-function patches |
+| G5 3D graph, hover shows local change | ✅ | hover tooltip with old/new line numbers; click pins full diff |
+| G6 depth control | ✅ | 0–6, `[`/`]`; hub damping |
+| G7 toggleable file/folder layer | ✅ | `f`; folders → files → functions |
+| G8 stats: files, lines, coverage | ✅ | + functions, call edges, languages; static test reach + lcov |
+| G9 fast cycling | ✅ | 87–350 ms per next PR on chainlink after warm-up (§10) |
+| Interactive picker shows +/− | ⚠️ | not available from GitHub search API; shown in the UI after analysis |
+| Hover file → GitHub | ⚠️ | file nodes show stats on hover; GitHub link lives in the pinned detail of functions |
+| Type-accurate call resolution | ⛔ non-goal | heuristic; precision-first rules in §5.1 |

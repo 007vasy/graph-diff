@@ -34,12 +34,23 @@ export async function hasCommit(dir: string, sha: string) {
   }
 }
 
-/** Fetch exactly these commits (shallow) — avoids cloning the full history of large repos. */
-export async function fetchCommits(dir: string, shas: string[]) {
-  const missing: string[] = [];
-  for (const s of shas) if (!(await hasCommit(dir, s))) missing.push(s);
-  if (!missing.length) return;
-  await git(dir, ['fetch', '-q', '--depth=1', '--no-tags', '--no-write-fetch-head', 'origin', ...missing]);
+const fetchLocks = new Map<string, Promise<unknown>>();
+
+/**
+ * Fetch exactly these commits (shallow) — avoids cloning the full history of large repos.
+ * Fetches into one repo are serialized (git's shallow file lock), so a background batch
+ * fetch and an on-demand fetch never collide; the later one usually finds its commits present.
+ */
+export function fetchCommits(dir: string, shas: string[]): Promise<void> {
+  const prev = fetchLocks.get(dir) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(async () => {
+    const missing: string[] = [];
+    for (const s of new Set(shas)) if (!(await hasCommit(dir, s))) missing.push(s);
+    if (!missing.length) return;
+    await git(dir, ['fetch', '-q', '--depth=1', '--no-tags', '--no-write-fetch-head', 'origin', ...missing]);
+  });
+  fetchLocks.set(dir, run);
+  return run;
 }
 
 export interface TreeEntry {

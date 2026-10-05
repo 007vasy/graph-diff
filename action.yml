@@ -1,0 +1,150 @@
+name: graph-diff
+description: 3D call-graph diff of a pull request — published to GitHub Pages, linked from the PR's checks and (optionally) a sticky comment.
+branding:
+  icon: git-pull-request
+  color: purple
+
+inputs:
+  github-token:
+    description: Token used to push to the Pages branch, set the commit status and comment.
+    default: ${{ github.token }}
+  publish:
+    description: "Where to put the site: 'pages' (gh-pages branch, one-click link) or 'artifact' (private workflow artifact + job summary)."
+    default: pages
+  pages-branch:
+    description: Branch GitHub Pages serves from.
+    default: gh-pages
+  pages-url:
+    description: Base URL of the Pages site. Defaults to https://<owner>.github.io/<repo>.
+    default: ''
+  allow-private-pages:
+    description: >-
+      Pages sites are PUBLIC unless your plan supports private Pages (GitHub Enterprise Cloud). The export contains
+      changed code. For private repositories, publishing to Pages is refused unless this is 'true'.
+    default: 'false'
+  comment:
+    description: Post / update a sticky PR comment with stats and the link.
+    default: 'true'
+  status:
+    description: Set a `graph-diff` commit status whose Details link opens the graph (one click from the PR checks box).
+    default: 'true'
+  coverage:
+    description: Optional path to an lcov.info for the head commit (run your tests before this action).
+    default: ''
+  max-files:
+    description: Max source files parsed per commit.
+    default: '15000'
+
+outputs:
+  url:
+    description: URL of the published graph (empty for artifact mode).
+    value: ${{ steps.meta.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Build graph-diff
+      shell: bash
+      run: |
+        cd "$GITHUB_ACTION_PATH"
+        npm ci --no-audit --no-fund --loglevel=error
+        npm run build --silent
+
+    - id: meta
+      name: Resolve PR metadata
+      shell: bash
+      env:
+        PUBLISH: ${{ inputs.publish }}
+        PAGES_URL: ${{ inputs.pages-url }}
+        ALLOW_PRIVATE: ${{ inputs.allow-private-pages }}
+        PRIVATE: ${{ github.event.repository.private }}
+        NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        mode="$PUBLISH"
+        if [ "$mode" = pages ] && [ "$PRIVATE" = true ] && [ "$ALLOW_PRIVATE" != true ]; then
+          echo "::warning::Private repository: not publishing to (possibly public) GitHub Pages. Using a workflow artifact instead. Set allow-private-pages: true if your Pages site is private."
+          mode=artifact
+        fi
+        base="${PAGES_URL:-https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}}"
+        url=""
+        [ "$mode" = pages ] && url="${base%/}/pr/${NUMBER}/"
+        echo "mode=$mode" >> "$GITHUB_OUTPUT"
+        echo "url=$url" >> "$GITHUB_OUTPUT"
+        echo "out=$RUNNER_TEMP/graph-diff-site/pr/$NUMBER" >> "$GITHUB_OUTPUT"
+
+    - name: Remove site of closed PR
+      if: github.event.action == 'closed' && steps.meta.outputs.mode == 'pages'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/publish-pages.sh" remove "${{ inputs.pages-branch }}" "pr/${{ github.event.pull_request.number }}"
+
+    - name: Analyse
+      if: github.event.action != 'closed'
+      shell: bash
+      env:
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        NUMBER: ${{ github.event.pull_request.number }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+        TITLE: ${{ github.event.pull_request.title }}
+        COVERAGE: ${{ inputs.coverage }}
+      run: |
+        git fetch --no-tags --quiet origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" "$HEAD_SHA" || {
+          echo "::error::Could not fetch base/head. Use actions/checkout with fetch-depth: 0."; exit 1; }
+        args=(export --base "origin/${BASE_REF}" --head "$HEAD_SHA" -o "${{ steps.meta.outputs.out }}"
+              --repo "$GITHUB_REPOSITORY" --number "$NUMBER" --url "$PR_URL" --title "$TITLE"
+              --max-files "${{ inputs.max-files }}")
+        [ -n "${{ steps.meta.outputs.url }}" ] && args+=(--link "${{ steps.meta.outputs.url }}")
+        [ -n "$COVERAGE" ] && [ -f "$COVERAGE" ] && args+=(--coverage "$COVERAGE")
+        node "$GITHUB_ACTION_PATH/dist/src/cli.js" "${args[@]}"
+        cat "${{ steps.meta.outputs.out }}/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Publish to GitHub Pages
+      if: github.event.action != 'closed' && steps.meta.outputs.mode == 'pages'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/publish-pages.sh" add "${{ inputs.pages-branch }}" "pr/${{ github.event.pull_request.number }}" "${{ steps.meta.outputs.out }}"
+
+    - name: Upload artifact
+      if: github.event.action != 'closed' && steps.meta.outputs.mode == 'artifact'
+      uses: actions/upload-artifact@v4
+      with:
+        name: graph-diff-pr-${{ github.event.pull_request.number }}
+        path: ${{ steps.meta.outputs.out }}
+
+    - name: Commit status (one-click "Details" link in the PR checks box)
+      if: github.event.action != 'closed' && inputs.status == 'true' && steps.meta.outputs.url != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        desc=$(node -e "const p=require(process.argv[1]+'/graph-0.json').stats; const c=p.coverage; console.log(('fns +'+p.fnAdded+' ~'+p.fnModified+' −'+p.fnRemoved+' · calls +'+p.edgesAdded+' −'+p.edgesRemoved+(c.staticTotal?' · test reach '+Math.round(100*c.staticCovered/c.staticTotal)+'%':'')).slice(0,140))" "${{ steps.meta.outputs.out }}")
+        gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state=success -f context=graph-diff \
+          -f target_url="${{ steps.meta.outputs.url }}" -f description="$desc" --silent
+
+    - name: Sticky PR comment
+      if: github.event.action != 'closed' && inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        body="${{ steps.meta.outputs.out }}/summary.md"
+        if [ "${{ steps.meta.outputs.mode }}" = artifact ]; then
+          printf '\n_Download the `graph-diff-pr-%s` artifact from the [workflow run](%s) and open `index.html` via a local server (`npx serve`)._\n' \
+            "$NUMBER" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$body"
+        fi
+        id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" --paginate \
+          --jq '[.[] | select(.body | startswith("<!-- graph-diff -->"))][0].id // empty')
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$body" --silent
+        else
+          gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" -F body=@"$body" --silent
+        fi

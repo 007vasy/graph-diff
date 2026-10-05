@@ -55,7 +55,13 @@ async function serve(queue: PrInfo[], index: number, o: Common, refresh?: () => 
 }
 
 async function pick(prs: PrInfo[]): Promise<number> {
-  if (!process.stdin.isTTY || prs.length <= 1) return 0;
+  if (!process.stdin.isTTY) {
+    // Non-interactive (piped / CI): print the queue and start at the first PR.
+    const w = Math.max(...prs.map((p) => p.key.length));
+    for (const [i, p] of prs.entries()) console.log(`${String(i + 1).padStart(3)}  ${p.key.padEnd(w)}  ${p.isDraft ? '[draft] ' : ''}${p.title}  — @${p.author}`);
+    return 0;
+  }
+  if (prs.length <= 1) return 0;
   const { search } = await import('@inquirer/prompts');
   const width = Math.max(...prs.map((p) => p.key.length));
   const choices = prs.map((p, i) => ({
