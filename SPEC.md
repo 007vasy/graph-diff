@@ -191,7 +191,7 @@ Layout: **left** PR queue · **centre** 3D graph · **right** stats + controls �
 | Removed fn | red sphere |
 | Modified fn | amber sphere, size ∝ lines changed |
 | Unchanged (context) fn | small grey sphere, opacity decreasing with depth |
-| File / folder node | blue / violet cube (only when folder layer is on) |
+| File / folder node | blue cube / violet diamond, always labelled (only when folder layer is on) |
 | Call edge | directional arrow + particles; colour by edge status |
 | Contains edge | thin dashed-looking dim line |
 

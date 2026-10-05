@@ -166,9 +166,10 @@ function nodeObject(n) {
     state.labels ||
     n === state.selected ||
     (n.type === 'function' && n.status !== 'unchanged' && state.changedVisible <= AUTO_LABEL_LIMIT) ||
-    (n.type === 'folder' && state.folders);
+    (n.type !== 'function' && state.folders); // files and folders are always labelled in the folder layer
   if (showLabel) {
-    const t = new SpriteText(n.label, n.type === 'function' && n.status !== 'unchanged' ? 4.2 : 3, nodeColor(n));
+    const size = n.status === 'unchanged' ? 3 : n.type === 'function' ? 4.2 : 3.6;
+    const t = new SpriteText(n.label, size, nodeColor(n));
     t.material.depthWrite = false;
     t.fontFace = 'ui-monospace, Menlo, monospace';
     t.position.y = r + 3.5;
@@ -499,6 +500,7 @@ const depthButtons = [...document.querySelectorAll('#depth [data-depth]')];
 function setDepth(d) {
   state.depth = Math.max(0, Math.min(MAX_DEPTH, d));
   for (const b of depthButtons) b.setAttribute('aria-checked', String(Number(b.dataset.depth) === state.depth));
+  state.pendingFit = true;
   applyFilter();
 }
 
@@ -514,6 +516,7 @@ function renderDepthCounts() {
 }
 $('folders').addEventListener('change', (e) => {
   state.folders = e.target.checked;
+  state.pendingFit = true; // re-frame once the re-heated layout settles
   applyFilter();
 });
 $('labels').addEventListener('change', (e) => {
