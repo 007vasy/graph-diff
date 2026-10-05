@@ -151,6 +151,7 @@ Primary key = `FnId`. File renames detected by `git diff -M` are applied to base
 | `unchanged` | in both, same hash |
 
 Edges: present in head only → `added`; base only → `removed`; both → `unchanged`.
+**Exception:** an edge between two *unchanged* functions is always `unchanged`. Their code is identical, so any difference can only come from name-based resolution shifting (e.g. the PR added another same-named function elsewhere). Moved functions still show as removed + added edges, because an endpoint changed.
 Each `added/removed/modified` function carries a **unified patch** (function-scoped, with real line numbers) and `+/-` line counts.
 
 ### 5.4 Graph sent to the UI
@@ -205,6 +206,7 @@ Layout: **left** PR queue · **centre** 3D graph · **right** stats + controls �
 - Loading state per PR with progress messages streamed from the server.
 - Queue status dots (prefetched / analysing / error), `?` shortcut sheet, empty state for PRs without function-level changes (folder layer switched on), responsive layout (queue folds into a top-bar prev/next below 980px).
 - Changed-function list (j/k order) and changed-file list in the side panel; click to fly to the node.
+- Collapsible **legend** explaining every node type (added / modified / removed / context, `‹file›` top-level code, red "no test reach" ring, file, folder) and edge type (new / removed / existing call, hovered node's calls, contains). Hovering an **edge** shows `caller → callee` and its status.
 
 ## 8. HTTP API
 
@@ -250,6 +252,9 @@ Benchmarked on PRs of a large monorepo (`smartcontractkit/chainlink`, Go; ~3.2k 
 See [docs/GITHUB_INTEGRATION.md](docs/GITHUB_INTEGRATION.md) for the options analysis. Implemented: composite action `action.yml`:
 `graph-diff export` in the checkout → publish to `gh-pages/pr/<n>/` → **commit status `graph-diff` with a Details link** (one click from the PR checks box) + sticky stats comment; removed on PR close.
 Private repos are never published to (possibly public) Pages without explicit opt-in; they get a private artifact + job summary instead.
+The PR comment ranks production code before tests and lists changed functions that no test reaches.
+
+Verified end to end on a public fork of go-ethereum with 8 replayed upstream PRs (~30 s per run; status link, hosted view, comment updates, cleanup on close). Details are in docs/GITHUB_INTEGRATION.md.
 
 ## 14. Conformance audit (v0.1)
 

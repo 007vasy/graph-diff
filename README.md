@@ -69,6 +69,10 @@ npm test                                       # unit + end-to-end tests
 npm run bench -- smartcontractkit/chainlink 6  # per-phase timings → BENCHMARKS.md
 ```
 
+## Testing it
+
+See the [review handbook](docs/REVIEW_HANDBOOK.md), a 10-minute hands-on walkthrough.
+
 ## License
 
 [MIT](LICENSE)
