@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: 007vasy/graph-diff@v0.2
+      - uses: 007vasy/graph-diff@v0.3
 ```
 
 Each PR gets a `graph-diff` commit status whose **Details** link opens the graph on GitHub Pages, plus a sticky stats comment.
