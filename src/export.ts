@@ -38,8 +38,12 @@ export function summaryMarkdown(p: GraphPayload, link?: string): string {
   const changed = p.nodes
     .filter((n) => n.type === 'function' && n.status !== 'unchanged' && n.kind !== 'module')
     .sort((a, b) => (b.added ?? 0) + (b.removed ?? 0) - ((a.added ?? 0) + (a.removed ?? 0)));
+  // Production code first: that's what needs review attention; tests are summarised in one line.
+  const prod = changed.filter((n) => !n.isTest);
+  const tests = changed.filter((n) => n.isTest);
+  const uncovered = prod.filter((n) => n.covered === false);
   const icon = { added: '🟢', modified: '🟡', removed: '🔴', unchanged: '' } as const;
-  const top = changed
+  const top = prod
     .slice(0, 10)
     .map(
       (n) =>
@@ -53,10 +57,13 @@ export function summaryMarkdown(p: GraphPayload, link?: string): string {
     `|---|---|---|---|---|`,
     `| ${s.filesChanged} | +${s.linesAdded} / −${s.linesRemoved} | ${s.fnAdded} / ${s.fnModified} / ${s.fnRemoved} | ${s.edgesAdded} / ${s.edgesRemoved} | ${pct(s.coverage.staticCovered, s.coverage.staticTotal)} (${s.coverage.staticCovered}/${s.coverage.staticTotal})${s.coverage.lcov ? ` · lcov ${pct(s.coverage.lcov.coveredLines, s.coverage.lcov.totalLines)}` : ''} |`,
   ];
+  if (uncovered.length) {
+    lines.push('', `⚠️ **${uncovered.length} changed function${uncovered.length > 1 ? 's' : ''} not reached by any test:** ${uncovered.slice(0, 8).map((n) => `\`${n.label}\``).join(', ')}${uncovered.length > 8 ? ', …' : ''}`);
+  }
   if (top.length) {
     lines.push(
       '',
-      `<details><summary>Largest changed functions (${changed.length} total)</summary>`,
+      `<details><summary>Largest changed functions (${prod.length} in code${tests.length ? `, ${tests.length} in tests` : ''})</summary>`,
       '',
       '| function | location | lines | test reach |',
       '|---|---|---|---|',

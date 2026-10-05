@@ -43,7 +43,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v7
       with:
         node-version: 22
 
@@ -113,7 +113,7 @@ runs:
 
     - name: Upload artifact
       if: github.event.action != 'closed' && steps.meta.outputs.mode == 'artifact'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: graph-diff-pr-${{ github.event.pull_request.number }}
         path: ${{ steps.meta.outputs.out }}
