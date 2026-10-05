@@ -73,10 +73,16 @@ export function diffGraphs(base: CallGraph, head: CallGraph, opts: DiffOptions):
   const status = new Map<string, Status>();
   for (const id of ids) status.set(id, fnStatus(base.nodes.get(id), head.nodes.get(id)));
 
-  // Edge statuses over the union of both graphs.
+  // Edge statuses over the union of both graphs. A call edge only counts as added/removed when at least
+  // one endpoint changed: between two untouched functions a difference can only come from name-based
+  // resolution shifting (e.g. the PR added another function with the same name elsewhere), not from code.
+  const endpointsUnchanged = (e: string) => {
+    const [a, b] = e.split('->');
+    return status.get(a) === 'unchanged' && status.get(b) === 'unchanged';
+  };
   const edgeStatus = new Map<string, Status>();
-  for (const e of head.edges) edgeStatus.set(e, base.edges.has(e) ? 'unchanged' : 'added');
-  for (const e of base.edges) if (!head.edges.has(e)) edgeStatus.set(e, 'removed');
+  for (const e of head.edges) edgeStatus.set(e, base.edges.has(e) || endpointsUnchanged(e) ? 'unchanged' : 'added');
+  for (const e of base.edges) if (!head.edges.has(e)) edgeStatus.set(e, endpointsUnchanged(e) ? 'unchanged' : 'removed');
 
   const adj = new Map<string, string[]>();
   for (const e of edgeStatus.keys()) {

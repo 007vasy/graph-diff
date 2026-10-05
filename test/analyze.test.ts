@@ -108,3 +108,20 @@ test('lcov coverage of added lines', async () => {
   assert.deepEqual(p.stats.coverage.lcov && [p.stats.coverage.lcov.coveredLines, p.stats.coverage.lcov.totalLines], [1, 2]);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('resolution churn between unchanged functions is not reported as an edge change', async () => {
+  // b.go::caller calls x.Allow(); in base there are 2 Allow methods (linked), the PR adds a 3rd in another
+  // package so the ambiguous member call is no longer linked in head. caller and both old methods are untouched.
+  const dir = repo(
+    {
+      'a/a.go': 'package a\ntype A struct{}\nfunc (A) Allow() bool { return true }\n',
+      'b/b.go': 'package b\ntype B struct{}\nfunc (B) Allow() bool { return true }\nfunc caller(x B) { x.Allow() }\n',
+    },
+    { 'c/c.go': 'package c\ntype C struct{}\nfunc (C) Allow() bool { return false }\n' },
+  );
+  const p = await analyze({ key: 'c', title: 't', local: { cwd: dir, base: 'main', head: 'feature' } });
+  const churn = p.links.filter((l) => l.type === 'call' && l.status !== 'unchanged' && !l.target.startsWith('c/'));
+  assert.deepEqual(churn, []);
+  assert.equal(p.stats.edgesRemoved, 0);
+  rmSync(dir, { recursive: true, force: true });
+});

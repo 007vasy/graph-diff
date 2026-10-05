@@ -9,7 +9,7 @@ import { langForPath } from './parser/index.js';
 import { extractMany, type ParseItem } from './parser/pool.js';
 import type { FileChange, FnNode, GraphPayload, PrInfo } from './types.js';
 
-const ANALYSIS_VERSION = 4;
+const ANALYSIS_VERSION = 5;
 const MAX_FILE_BYTES = 512 * 1024;
 
 const EXCLUDE =
