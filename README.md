@@ -68,3 +68,7 @@ two graphs per function. It then serves the result to a [3d-force-graph](https:/
 npm test                                       # unit + end-to-end tests
 npm run bench -- smartcontractkit/chainlink 6  # per-phase timings → BENCHMARKS.md
 ```
+
+## License
+
+[MIT](LICENSE)
