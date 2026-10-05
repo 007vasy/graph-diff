@@ -44,6 +44,7 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     const exec = () =>
       analyze(pr, { ...opts.analyze, onProgress: (m) => (job.message = m) }).then(
         (p) => {
+          Object.assign(pr, { title: p.pr.title, author: p.pr.author, url: p.pr.url, isDraft: p.pr.isDraft });
           job.state = 'done';
           job.message = 'Done';
           recent.push(key);

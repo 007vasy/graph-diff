@@ -8,7 +8,6 @@
 import { writeFileSync } from 'node:fs';
 import { analyze } from '../src/analyze.js';
 import { listPrs } from '../src/github.js';
-import type { PrInfo } from '../src/types.js';
 
 const [repo = 'smartcontractkit/chainlink', nArg = '6', ...rest] = process.argv.slice(2);
 const n = Number(nArg);
@@ -18,37 +17,9 @@ const PHASES = ['resolve', 'fetch', 'diff', 'lsTree', 'select', 'readBlobs', 'pa
 const fmt = (ms: number | undefined) => (ms == null ? '–' : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
 const mb = () => Math.round(process.memoryUsage().rss / 1e6);
 
-/** Fallback when `gh` can't access the org (e.g. SAML SSO not authorized): public REST, anonymous HTTPS fetch. */
-async function publicPrs(): Promise<PrInfo[]> {
-  process.env.GRAPH_DIFF_GIT_PROTOCOL = 'https';
-  const api = (path: string) =>
-    fetch(`https://api.github.com/repos/${repo}/${path}`, { headers: { accept: 'application/vnd.github+json' } }).then((r) => {
-      if (!r.ok) throw new Error(`GitHub REST ${r.status} for ${path}`);
-      return r.json() as Promise<any>;
-    });
-  const list: any[] = await api('pulls?state=open&per_page=40');
-  const [owner, name] = repo.split('/');
-  const out: PrInfo[] = [];
-  for (const p of list.filter((p) => !explicit.length || explicit.includes(p.number)).slice(0, n)) {
-    const cmp = await api(`compare/${encodeURIComponent(p.base.ref)}...${p.head.sha}?per_page=1`);
-    out.push({
-      key: `${repo}#${p.number}`, owner, repo: name, number: p.number, title: p.title, url: p.html_url,
-      author: p.user?.login, baseRef: p.base.ref, headRef: p.head.ref, headSha: p.head.sha,
-      baseSha: cmp.merge_base_commit.sha,
-    });
-  }
-  return out;
-}
-
-let prs: PrInfo[];
-try {
-  prs = (await listPrs({ all: true, repo, limit: 40 }))
-    .filter((p) => !explicit.length || explicit.includes(p.number!))
-    .slice(0, n);
-} catch (e) {
-  console.log(`gh failed (${String((e as Error).message).split('\n')[0]}); using public REST API`);
-  prs = await publicPrs();
-}
+const prs = (await listPrs({ all: true, repo, limit: 40 }))
+  .filter((p) => !explicit.length || explicit.includes(p.number!))
+  .slice(0, n);
 console.log(`Benchmarking ${prs.length} PRs of ${repo}`);
 
 const rows: string[] = [];

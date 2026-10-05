@@ -136,4 +136,53 @@ common(program.command('local').description('Diff two refs of the git repo in th
     }
   });
 
+program
+  .command('export [pr...]')
+  .description('Write a static site (for GitHub Pages / CI). Without <pr>, diffs --base..--head of the local repo.')
+  .requiredOption('-o, --out <dir>', 'output directory')
+  .option('--base <ref>', 'base ref (local mode)', 'main')
+  .option('--head <ref>', 'head ref (local mode)', 'HEAD')
+  .option('--title <text>', 'title (local mode)')
+  .option('--link <url>', 'public URL of the exported site (used in summary.md)')
+  .option('--repo <owner/repo>', 'GitHub repo, for source links (local mode)')
+  .option('--number <n>', 'PR number (local mode)')
+  .option('--url <url>', 'PR URL (local mode)')
+  .option('--coverage <lcov>', 'lcov.info for the head commit')
+  .option('--max-files <n>', 'max source files parsed per commit', '15000')
+  .option('--include-generated', 'also parse vendored/generated code')
+  .action(async (refs: string[], o) => {
+    try {
+      const { exportSite } = await import('./export.js');
+      const queue: PrInfo[] = [];
+      if (refs.length) {
+        for (const r of refs) {
+          const { owner, repo, number } = await parsePrRef(r);
+          queue.push({ key: prKey(owner, repo, number), owner, repo, number, title: `${owner}/${repo}#${number}` });
+        }
+      } else {
+        const cwd = (await git(process.cwd(), ['rev-parse', '--show-toplevel'])).trim();
+        const [owner, repo] = (o.repo ?? '').split('/');
+        queue.push({
+          key: o.repo && o.number ? prKey(owner, repo, Number(o.number)) : `local:${o.base}..${o.head}`,
+          title: o.title ?? `${o.base} … ${o.head}`,
+          owner: owner || undefined,
+          repo: repo || undefined,
+          number: o.number ? Number(o.number) : undefined,
+          url: o.url,
+          local: { cwd, base: o.base, head: o.head },
+        });
+      }
+      const [p] = await exportSite(queue, o.out, {
+        coverage: o.coverage,
+        maxFiles: Number(o.maxFiles),
+        includeGenerated: o.includeGenerated,
+        link: o.link,
+      });
+      const s = p.stats;
+      console.log(`Exported to ${o.out}: ${s.filesChanged} files, +${s.linesAdded}/−${s.linesRemoved}, fns +${s.fnAdded}/~${s.fnModified}/−${s.fnRemoved}`);
+    } catch (e) {
+      fail(e);
+    }
+  });
+
 program.parseAsync().catch(fail);

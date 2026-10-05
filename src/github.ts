@@ -16,6 +16,35 @@ export async function gh<T = unknown>(args: string[], cwd?: string): Promise<T> 
   }
 }
 
+/**
+ * Anonymous REST fallback for public repos when `gh` is blocked (e.g. org SAML SSO not authorized for the token).
+ * Rate-limited to 60 requests/hour by GitHub.
+ */
+async function publicApi<T = any>(path: string): Promise<T> {
+  const r = await fetch(`https://api.github.com/${path}`, { headers: { accept: 'application/vnd.github+json' } });
+  if (!r.ok) throw new Error(`GitHub REST ${r.status} for ${path}`);
+  return r.json() as Promise<T>;
+}
+
+const isSso = (e: unknown) => /SAML|SSO/i.test(String((e as Error)?.message));
+
+function fromRest(owner: string, repo: string, p: any): PrInfo {
+  return {
+    key: prKey(owner, repo, p.number),
+    owner,
+    repo,
+    number: p.number,
+    title: p.title,
+    url: p.html_url,
+    author: p.user?.login,
+    isDraft: p.draft,
+    updatedAt: p.updated_at,
+    baseRef: p.base?.ref,
+    headRef: p.head?.ref,
+    headSha: p.head?.sha,
+  };
+}
+
 export const prKey = (owner: string, repo: string, number: number) => `${owner}/${repo}#${number}`;
 
 interface SearchPr {
@@ -57,12 +86,18 @@ export interface ListOptions {
 export async function listPrs(opts: ListOptions): Promise<PrInfo[]> {
   const limit = String(opts.limit ?? 50);
   if (opts.all && opts.repo) {
+    const [owner, repo] = opts.repo.split('/');
     const list = await gh<any[]>([
       'pr', 'list', '-R', opts.repo, '--state', 'open', '--limit', limit,
       '--json', 'number,title,url,isDraft,updatedAt,author',
       ...(opts.author ? ['--author', opts.author] : []),
-    ]);
-    const [owner, repo] = opts.repo.split('/');
+    ]).catch(async (e) => {
+      if (!isSso(e)) throw e;
+      warnSso(owner);
+      const prs = await publicApi<any[]>(`repos/${owner}/${repo}/pulls?state=open&per_page=${Math.min(100, Number(limit))}`);
+      return prs.filter((p) => !opts.author || p.user?.login === opts.author).map((p) => ({ ...fromRest(owner, repo, p), repository: undefined }));
+    });
+    if (list.length && 'key' in list[0]) return list as PrInfo[];
     return list.map((p) => fromSearch({ ...p, repository: { nameWithOwner: `${owner}/${repo}` } }));
   }
   const args = ['search', 'prs', '--state=open', '--limit', limit, '--json', SEARCH_FIELDS, '--sort', 'updated'];
@@ -101,6 +136,28 @@ export async function parsePrRef(ref: string): Promise<{ owner: string; repo: st
 
 /** Fill in base/head SHAs (base = merge-base, matching GitHub's "Files changed"). */
 export async function resolvePr(pr: PrInfo): Promise<PrInfo & { baseSha: string; headSha: string }> {
+  try {
+    return await resolvePrGh(pr);
+  } catch (e) {
+    if (!isSso(e)) throw e;
+    warnSso(pr.owner!);
+    const { owner, repo, number } = pr as Required<PrInfo>;
+    const p = await publicApi(`repos/${owner}/${repo}/pulls/${number}`);
+    const cmp = await publicApi(`repos/${owner}/${repo}/compare/${encodeURIComponent(p.base.ref)}...${p.head.sha}?per_page=1`);
+    useHttps = true;
+    return { ...pr, ...fromRest(owner, repo, p), headSha: p.head.sha, baseSha: cmp.merge_base_commit.sha };
+  }
+}
+
+const warned = new Set<string>();
+function warnSso(owner: string) {
+  if (warned.has(owner)) return;
+  warned.add(owner);
+  console.error(`graph-diff: your gh token isn't SSO-authorized for "${owner}"; using anonymous public API (60 req/h). Run \`gh auth refresh\` / authorize the token for the org to fix.`);
+}
+let useHttps = false;
+
+async function resolvePrGh(pr: PrInfo): Promise<PrInfo & { baseSha: string; headSha: string }> {
   const { owner, repo, number } = pr as Required<PrInfo>;
   const v = await gh<any>([
     'pr', 'view', String(number), '-R', `${owner}/${repo}`,
@@ -129,5 +186,5 @@ export async function remoteUrl(owner: string, repo: string) {
   protocol ??= process.env.GRAPH_DIFF_GIT_PROTOCOL
     ? Promise.resolve(process.env.GRAPH_DIFF_GIT_PROTOCOL)
     : pexec('gh', ['config', 'get', 'git_protocol']).then((r) => r.stdout.trim(), () => 'https');
-  return (await protocol) === 'ssh' ? `git@github.com:${owner}/${repo}.git` : `https://github.com/${owner}/${repo}.git`;
+  return !useHttps && (await protocol) === 'ssh' ? `git@github.com:${owner}/${repo}.git` : `https://github.com/${owner}/${repo}.git`;
 }

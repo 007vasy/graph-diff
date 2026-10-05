@@ -4,12 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>graph-diff</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <meta name="theme-color" content="#0b0f14" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <aside id="left">
     <header>
-      <div class="brand"><span class="logo">◆</span> graph-diff</div>
+      <div class="brand"><img src="favicon.svg" alt="" class="logo" /> graph-diff</div>
       <button id="refresh" title="Reload PR list">↻</button>
     </header>
     <div class="nav">
@@ -23,10 +25,30 @@
   <main id="center">
     <div id="graph"></div>
     <div id="topbar">
+      <div id="mini-nav"><button id="mprev" title="Previous PR (p)">◀</button><span id="mpos"></span><button id="mnext" title="Next PR (n)">▶</button></div>
       <div id="title"></div>
       <div id="meta"></div>
     </div>
-    <div id="loading" hidden><div class="spinner"></div><div id="loadmsg">Loading…</div></div>
+    <div id="loading" hidden>
+      <div class="loader"><i></i><i></i><i></i></div>
+      <div id="loadmsg">Loading…</div>
+      <div class="loadhint">Parsing both commits into call graphs — later PRs reuse the parse cache.</div>
+    </div>
+    <button id="help-btn" title="Keyboard shortcuts (?)">?</button>
+    <div id="help" hidden>
+      <h3>Keyboard</h3>
+      <dl>
+        <dt><kbd>n</kbd> <kbd>p</kbd></dt><dd>next / previous PR</dd>
+        <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>next / previous changed function</dd>
+        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>call-graph depth −/+</dd>
+        <dt><kbd>f</kbd></dt><dd>file / folder layer</dd>
+        <dt><kbd>l</kbd></dt><dd>all labels</dd>
+        <dt><kbd>/</kbd></dt><dd>find function</dd>
+        <dt><kbd>z</kbd></dt><dd>zoom to fit</dd>
+        <dt><kbd>Esc</kbd></dt><dd>close detail</dd>
+      </dl>
+      <p class="muted small">Hover a node for its diff · click to pin it · drag to orbit · scroll to zoom</p>
+    </div>
     <div id="error" hidden></div>
     <section id="detail" hidden>
       <header><span id="detail-title"></span><button id="detail-close" title="Close (Esc)">✕</button></header>
@@ -47,10 +69,10 @@
     <section>
       <h3>Changes</h3>
       <div class="tiles">
-        <div class="tile"><b id="s-files">–</b><span>files</span></div>
-        <div class="tile"><b id="s-add" class="c-added">–</b><span>lines added</span></div>
-        <div class="tile"><b id="s-del" class="c-removed">–</b><span>lines removed</span></div>
-        <div class="tile"><b id="s-fn">–</b><span>functions</span></div>
+        <div class="tile t-files"><b id="s-files">–</b><span>files changed</span></div>
+        <div class="tile t-add"><b id="s-add" class="c-added">–</b><span>lines added</span></div>
+        <div class="tile t-del"><b id="s-del" class="c-removed">–</b><span>lines removed</span></div>
+        <div class="tile t-fn"><b id="s-fn">–</b><span>functions touched</span></div>
       </div>
       <div class="fnbar" id="s-fnbar"></div>
       <div class="row small" id="s-edges"></div>

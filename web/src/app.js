@@ -1,6 +1,7 @@
 import ForceGraph3D from '3d-force-graph';
 import * as THREE from 'three';
 import SpriteText from 'three-spritetext';
+import { forceX, forceY, forceZ } from 'd3-force-3d';
 
 const $ = (id) => document.getElementById(id);
 const COLORS = {
@@ -12,6 +13,13 @@ const COLORS = {
   folder: '#a371f7',
 };
 const HOVER_PATCH_LINES = 40;
+/** Static export (GitHub Pages etc.): data comes from JSON files next to the page instead of the local server. */
+const STATIC = !!window.GRAPH_DIFF_STATIC;
+const api = {
+  queue: (refresh) => fetch(STATIC ? 'queue.json' : `/api/queue${refresh ? '?refresh=1' : ''}`),
+  graph: (key) => (STATIC ? fetch(`graph-${state.queue.findIndex((p) => p.key === key)}.json`) : fetch(`/api/graph?key=${encodeURIComponent(key)}`)),
+  status: (key) => fetch(`/api/status?key=${encodeURIComponent(key)}`),
+};
 const AUTO_LABEL_LIMIT = 120;
 
 const state = {
@@ -33,8 +41,10 @@ const state = {
 // ---------- 3D graph ----------
 
 const graph = new ForceGraph3D($('graph'), { controlType: 'orbit' })
-  .backgroundColor('#0b0f14')
+  .backgroundColor('rgba(0,0,0,0)') // CSS gradient shows through
   .showNavInfo(false)
+  .warmupTicks(80) // lay out before first paint so the camera can frame it immediately
+  .cooldownTime(5000)
   .nodeId('id')
   .nodeLabel((n) => tooltipHtml(n, true))
   .nodeThreeObject((n) => nodeObject(n))
@@ -55,14 +65,15 @@ const graph = new ForceGraph3D($('graph'), { controlType: 'orbit' })
   .onNodeClick((n) => select(n, true))
   .onBackgroundClick(() => select(null))
   .onEngineStop(() => {
-    if (state.pendingFit) {
-      state.pendingFit = false;
-      graph.zoomToFit(700, 60);
-    }
+    if (state.pendingFit && !state.selected) graph.zoomToFit(700, 50);
+    state.pendingFit = false;
   });
 
-graph.d3Force('charge').strength(-60);
-graph.d3Force('link').distance((l) => (l.type === 'contains' ? 22 : 45));
+graph.d3Force('charge').strength(-45).distanceMax(250);
+graph.d3Force('link').distance((l) => (l.type === 'contains' ? 18 : 30));
+// Gentle pull to the origin keeps disconnected components close, so zoom-to-fit stays readable.
+for (const [k, f] of [['x', forceX], ['y', forceY], ['z', forceZ]]) graph.d3Force(k, f(0).strength(0.06));
+window.__gd = { graph, state }; // debugging / e2e hooks
 
 new ResizeObserver(() => {
   const el = $('center');
@@ -79,9 +90,29 @@ const materials = new Map();
 function material(color, opacity) {
   const k = `${color}:${opacity.toFixed(2)}`;
   if (!materials.has(k)) {
-    materials.set(k, new THREE.MeshLambertMaterial({ color, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 }));
+    materials.set(
+      k,
+      new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.28, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 }),
+    );
   }
   return materials.get(k);
+}
+
+const glowTextures = new Map();
+function glowTexture(color) {
+  if (!glowTextures.has(color)) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, color + 'aa');
+    grad.addColorStop(0.35, color + '44');
+    grad.addColorStop(1, color + '00');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    glowTextures.set(color, new THREE.CanvasTexture(c));
+  }
+  return glowTextures.get(color);
 }
 
 const ringTexture = (() => {
@@ -118,6 +149,13 @@ function nodeObject(n) {
   const mesh = new THREE.Mesh(geo, material(n === state.selected ? '#ffffff' : nodeColor(n), opacity));
   mesh.scale.setScalar(r);
   group.add(mesh);
+  if ((n.type === 'function' && n.status !== 'unchanged') || n === state.selected) {
+    const glow = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: glowTexture(n === state.selected ? '#ffffff' : nodeColor(n)), depthWrite: false, transparent: true, blending: THREE.AdditiveBlending }),
+    );
+    glow.scale.setScalar(r * (n === state.selected ? 6 : 4.5));
+    group.add(glow);
+  }
   if (n.covered === false) {
     const ring = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTexture, depthWrite: false, transparent: true }));
     ring.scale.setScalar(r * 3);
@@ -129,7 +167,7 @@ function nodeObject(n) {
     (n.type === 'function' && n.status !== 'unchanged' && state.changedVisible <= AUTO_LABEL_LIMIT) ||
     (n.type === 'folder' && state.folders);
   if (showLabel) {
-    const t = new SpriteText(n.label, n.type === 'function' && n.status !== 'unchanged' ? 3 : 2.4, nodeColor(n));
+    const t = new SpriteText(n.label, n.type === 'function' && n.status !== 'unchanged' ? 4.2 : 3, nodeColor(n));
     t.material.depthWrite = false;
     t.fontFace = 'ui-monospace, Menlo, monospace';
     t.position.y = r + 3.5;
@@ -197,6 +235,17 @@ function applyFilter() {
   document.body.classList.toggle('folders', state.folders);
 }
 
+/** Frame the graph as soon as nodes have real positions (a zero-size bbox would zoom the camera inside it). */
+function fitWhenLaidOut(token, tries = 0) {
+  setTimeout(() => {
+    if (token !== state.loadToken) return;
+    const bb = graph.getGraphBbox();
+    const size = bb ? Math.max(bb.x[1] - bb.x[0], bb.y[1] - bb.y[0], bb.z[1] - bb.z[0]) : 0;
+    if (size > 5 || (graph.graphData().nodes.length === 1 && bb)) graph.zoomToFit(400, 50);
+    else if (tries < 20) fitWhenLaidOut(token, tries + 1);
+  }, 150);
+}
+
 function rerenderNodes() {
   graph.nodeThreeObject(graph.nodeThreeObject());
 }
@@ -209,10 +258,9 @@ function patchHtml(n, limit) {
   if (!n.patch?.length) return '';
   const lines = limit ? n.patch.slice(0, limit) : n.patch;
   const rows = lines.map((l) => {
-    if (l.t === '@') return `<div class="h"><span class="ln"></span><span class="tx">${esc(l.s)}</span></div>`;
+    if (l.t === '@') return `<div class="h"><span class="ln"></span><span class="ln"></span><span class="tx">${esc(l.s)}</span></div>`;
     const cls = l.t === '+' ? 'p' : l.t === '-' ? 'm' : '';
-    const ln = l.t === '-' ? l.o : l.n;
-    return `<div class="${cls}"><span class="ln">${ln ?? ''}</span><span class="tx">${esc(l.t === ' ' ? ' ' : l.t)} ${esc(l.s)}</span></div>`;
+    return `<div class="${cls}"><span class="ln">${l.o ?? ''}</span><span class="ln">${l.n ?? ''}</span><span class="tx">${esc(l.t === ' ' ? ' ' : l.t)} ${esc(l.s)}</span></div>`;
   });
   const more = limit && n.patch.length > limit ? n.patch.length - limit : 0;
   if (more) rows.push(`<div class="more">… ${more} more lines — click the node to pin the full diff</div>`);
@@ -351,16 +399,19 @@ function renderQueue(statuses = {}) {
   $('queue').innerHTML = state.queue
     .map(
       (p, i) =>
-        `<li data-i="${i}" class="${i === state.index ? 'active' : ''}"><div class="q-key"><i class="st ${statuses[p.key] ?? ''}"></i>${esc(p.key)}${p.isDraft ? ' <span class="draft">draft</span>' : ''}</div><div class="q-title">${esc(p.title)}</div>${p.author ? `<div class="q-author">@${esc(p.author)}</div>` : ''}</li>`,
+        `<li data-i="${i}" class="${i === state.index ? 'active' : ''}"><div class="q-key"><i class="st ${statuses[p.key] ?? ''}"></i><span>${esc(p.key)}</span>${p.isDraft ? ' <span class="draft">draft</span>' : ''}</div><div class="q-title">${esc(p.title)}</div>${p.author ? `<div class="q-author">@${esc(p.author)}</div>` : ''}</li>`,
     )
     .join('');
-  $('pos').textContent = `${state.index + 1} / ${state.queue.length}`;
+  $('pos').textContent = $('mpos').textContent = `${state.index + 1} / ${state.queue.length}`;
+  $('mprev').disabled = state.index <= 0;
+  $('mnext').disabled = state.index >= state.queue.length - 1;
   $('prev').disabled = state.index <= 0;
   $('next').disabled = state.index >= state.queue.length - 1;
 }
 
 async function pollStatuses() {
   try {
+    if (STATIC) return renderQueue();
     const s = await (await fetch('/api/statuses')).json();
     renderQueue(s);
   } catch {}
@@ -383,11 +434,12 @@ async function loadPr(index) {
   $('loading').hidden = false;
   $('loadmsg').textContent = 'Loading…';
   const poll = setInterval(async () => {
-    const s = await (await fetch(`/api/status?key=${encodeURIComponent(pr.key)}`)).json();
+    if (STATIC) return;
+    const s = await (await api.status(pr.key)).json();
     if (token === state.loadToken && s.message) $('loadmsg').textContent = s.message;
   }, 350);
   try {
-    const res = await fetch(`/api/graph?key=${encodeURIComponent(pr.key)}`);
+    const res = await api.graph(pr.key);
     const body = await res.json();
     if (token !== state.loadToken) return;
     if (!res.ok) throw new Error(body.error);
@@ -396,6 +448,7 @@ async function loadPr(index) {
       l._t = l.target;
     }
     state.payload = body;
+    Object.assign(state.queue[index], { title: body.pr.title, author: body.pr.author, url: body.pr.url, isDraft: body.pr.isDraft });
     state.changed = body.nodes
       .filter((n) => n.type === 'function' && n.status !== 'unchanged')
       .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -406,6 +459,7 @@ async function loadPr(index) {
     renderChanges();
     renderFiles();
     applyFilter();
+    fitWhenLaidOut(token);
   } catch (e) {
     if (token !== state.loadToken) return;
     $('error').textContent = `Failed to analyse ${pr.key}:\n${e.message}`;
@@ -483,7 +537,10 @@ $('files').addEventListener('click', (e) => {
   if (n) select(n, true);
 });
 $('detail-close').addEventListener('click', () => select(null));
+$('help-btn').addEventListener('click', () => ($('help').hidden = !$('help').hidden));
 $('prev').addEventListener('click', () => loadPr(state.index - 1));
+$('mprev').addEventListener('click', () => loadPr(state.index - 1));
+$('mnext').addEventListener('click', () => loadPr(state.index + 1));
 $('next').addEventListener('click', () => loadPr(state.index + 1));
 $('queue').addEventListener('click', (e) => {
   const li = e.target.closest('li');
@@ -491,7 +548,7 @@ $('queue').addEventListener('click', (e) => {
 });
 $('refresh').addEventListener('click', async () => {
   const cur = state.queue[state.index]?.key;
-  const q = await (await fetch('/api/queue?refresh=1')).json();
+  const q = await (await api.queue(true)).json();
   state.queue = q.queue;
   const i = state.queue.findIndex((p) => p.key === cur);
   if (i >= 0) state.index = i;
@@ -510,8 +567,12 @@ document.addEventListener('keydown', (e) => {
     f: () => $('folders').click(),
     l: () => $('labels').click(),
     '/': () => $('search').focus(),
-    Escape: () => select(null),
-    z: () => graph.zoomToFit(600, 60),
+    Escape: () => {
+      $('help').hidden = true;
+      select(null);
+    },
+    '?': () => ($('help').hidden = !$('help').hidden),
+    z: () => graph.zoomToFit(600, 50),
   };
   const fn = actions[e.key];
   if (fn) {
@@ -523,8 +584,10 @@ document.addEventListener('keydown', (e) => {
 // ---------- Boot ----------
 
 (async () => {
-  const q = await (await fetch('/api/queue')).json();
+  const q = await (await api.queue()).json();
   state.queue = q.queue;
+  if (STATIC) document.body.classList.add('static');
+  if (STATIC && state.queue.length === 1) document.body.classList.add('single');
   setDepth(q.initialDepth ?? 1);
   const fromHash = decodeURIComponent(location.hash.slice(1));
   const hashIndex = state.queue.findIndex((p) => p.key === fromHash);
